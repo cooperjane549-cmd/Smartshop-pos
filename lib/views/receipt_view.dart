@@ -26,7 +26,8 @@ class ReceiptView extends StatelessWidget {
         pageFormat: format,
         build: (pw.Context context) {
           return pw.Column(
-            cross: pw.CrossAxisAlignment.start,
+            // Corrected 'cross:' to 'crossAxisAlignment:'
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
               pw.Center(
                 child: pw.Text(
@@ -41,7 +42,6 @@ class ReceiptView extends StatelessWidget {
               pw.Text('Transaction #: $transactionId'),
               pw.Divider(),
               pw.SizedBox(height: 10),
-              // Fixed deprecated pw.Table.fromTextArray to pw.TableHelper.fromTextArray
               pw.TableHelper.fromTextArray(
                 headers: ['Item', 'Qty', 'Price'],
                 data: items.map((item) {
@@ -75,7 +75,6 @@ class ReceiptView extends StatelessWidget {
       ),
     );
 
-    // Save outputs a Uint8List directly, matching FutureOr<Uint8List>
     final List<int> pdfData = await doc.save();
     return Uint8List.fromList(pdfData);
   }
@@ -87,7 +86,6 @@ class ReceiptView extends StatelessWidget {
         title: const Text('Receipt Preview'),
       ),
       body: PdfPreview(
-        // The build method signature requires FutureOr<Uint8List>
         build: (PdfPageFormat format) async {
           final Uint8List bytes = await _generatePdf(format);
           return bytes;
