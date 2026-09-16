@@ -5,6 +5,12 @@ plugins {
     id "com.google.gms.google-services"
 }
 
+def keyProperties = new Properties()
+def keyPropertiesFile = rootProject.file('key.properties')
+if (keyPropertiesFile.exists()) {
+    keyProperties.load(new FileInputStream(keyPropertiesFile))
+}
+
 android {
     namespace "co.ke.smartshoppos"
     compileSdkVersion 34
@@ -19,9 +25,21 @@ android {
         jvmTarget = '1.8'
     }
 
+    signingConfigs {
+        release {
+            if (keyPropertiesFile.exists()) {
+                keyAlias keyProperties['keyAlias']
+                keyPassword keyProperties['keyPassword']
+                storeFile keyProperties['storeFile'] ? file(keyProperties['storeFile']) : null
+                storePassword keyProperties['storePassword']
+            }
+        }
+    }
+
     defaultConfig {
         applicationId "co.ke.smartshoppos"
-        minSdkVersion 21
+        // Updated to 23 to satisfy the telephony plugin requirement
+        minSdkVersion 23
         targetSdkVersion 34
         versionCode 1
         versionName "1.0.0"
@@ -30,7 +48,7 @@ android {
 
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            signingConfig keyPropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
             minifyEnabled false
             shrinkResources false
         }
