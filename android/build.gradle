@@ -10,6 +10,26 @@ subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
 }
 
+// Automatically inject namespace into legacy plugins missing one for AGP 8+ compatibility
+subprojects { project ->
+    afterEvaluate {
+        if (project.hasProperty('android')) {
+            if (project.android.namespace == null) {
+                def manifestFile = project.file('src/main/AndroidManifest.xml')
+                if (manifestFile.exists()) {
+                    def parsedManifest = new groovy.xml.XmlParser().parse(manifestFile)
+                    def packageName = parsedManifest.attribute('package')
+                    if (packageName) {
+                        project.android.namespace = packageName
+                    } else {
+                        project.android.namespace = "com.example.${project.name.replaceAll('-', '_')}"
+                    }
+                }
+            }
+        }
+    }
+}
+
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }
