@@ -30,7 +30,7 @@ android {
             if (keyPropertiesFile.exists()) {
                 keyAlias keyProperties['keyAlias']
                 keyPassword keyProperties['keyPassword']
-                storeFile keyProperties['storeFile'] ? file(keyProperties['storeFile']) : file('upload-keystore.jks')
+                storeFile file(keyProperties['storeFile'])
                 storePassword keyProperties['storePassword']
             }
         }
@@ -38,7 +38,6 @@ android {
 
     defaultConfig {
         applicationId "co.ke.smartshoppos"
-        // Updated to 23 to satisfy the telephony plugin requirement
         minSdkVersion 23
         targetSdkVersion 34
         versionCode 1
