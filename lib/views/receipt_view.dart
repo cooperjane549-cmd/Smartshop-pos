@@ -3,96 +3,169 @@ import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:blue_thermal_printer/blue_thermal_printer.dart' as bt;
+import '../models/sale_transaction.dart';
+import '../services/thermal_printer_service.dart';
 
-class ReceiptView extends StatelessWidget {
-  final String storeName;
-  final String transactionId;
-  final List<Map<String, dynamic>> items;
-  final double totalPrice;
+class ReceiptView extends StatefulWidget {
+  final SaleTransaction sale;
+  final String shopName;
 
   const ReceiptView({
-    super.key,
-    required this.storeName,
-    required this.transactionId,
-    required this.items,
-    required this.totalPrice,
-  });
+    Key? key,
+    required this.sale,
+    this.shopName = 'SMARTSHOP POS',
+  }) : super(key: key);
 
-  Future<Uint8List> _generatePdf(PdfPageFormat format) async {
-    final doc = pw.Document();
+  @override
+  _ReceiptViewState createState() => _ReceiptViewState();
+}
 
-    doc.addPage(
-      pw.Page(
-        pageFormat: format,
-        build: (pw.Context context) {
-          return pw.Column(
-            // Corrected 'cross:' to 'crossAxisAlignment:'
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              pw.Center(
-                child: pw.Text(
-                  storeName,
-                  style: pw.TextStyle(
-                    fontSize: 20,
-                    fontWeight: pw.FontWeight.bold,
-                  ),
-                ),
-              ),
-              pw.SizedBox(height: 10),
-              pw.Text('Transaction #: $transactionId'),
-              pw.Divider(),
-              pw.SizedBox(height: 10),
-              pw.TableHelper.fromTextArray(
-                headers: ['Item', 'Qty', 'Price'],
-                data: items.map((item) {
-                  return [
-                    item['name'].toString(),
-                    item['quantity'].toString(),
-                    '\$${item['price']}',
-                  ];
-                }).toList(),
-                headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                cellAlignment: pw.Alignment.centerLeft,
-              ),
-              pw.Divider(),
-              pw.SizedBox(height: 10),
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text(
-                    'TOTAL',
-                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                  ),
-                  pw.Text(
-                    '\$${totalPrice.toStringAsFixed(2)}',
-                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-                  ),
-                ],
-              ),
-            ],
-          );
-        },
-      ),
-    );
+class _ReceiptViewState extends State<ReceiptView> {
+  final ThermalPrinterService _printerService = ThermalPrinterService();
+  List<bt.BluetoothDevice> _devices = [];
+  bt.BluetoothDevice? _selectedDevice;
 
-    final List<int> pdfData = await doc.save();
-    return Uint8List.fromList(pdfData);
+  @override
+  void initState() {
+    super.initState();
+    _loadBluetoothDevices();
+  }
+
+  void _loadBluetoothDevices() async {
+    List<bt.BluetoothDevice> list = await _printerService.getBondedDevices();
+    setState(() {
+      _devices = list;
+      if (_devices.isNotEmpty) _selectedDevice = _devices.first;
+    });
+  }
+
+  Future<void> _printThermal() async {
+    if (_selectedDevice != null) {
+      await _printerService.printTextSample(
+        widget.shopName,
+        "Total: KES ${widget.sale.totalAmount.toStringAsFixed(0)}",
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Receipt sent to printer!')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No Bluetooth printer selected.')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Receipt Preview'),
+        title: const Text('Sale Receipt'),
+        backgroundColor: Colors.indigo,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.print),
+            onPressed: _printThermal,
+          )
+        ],
       ),
-      body: PdfPreview(
-        build: (PdfPageFormat format) async {
-          final Uint8List bytes = await _generatePdf(format);
-          return bytes;
-        },
-        allowPrinting: true,
-        allowSharing: true,
+      body: Column(
+        children: [
+          if (_devices.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
+                children: [
+                  const Text("Printer: "),
+                  Expanded(
+                    child: DropdownButton<bt.BluetoothDevice>(
+                      value: _selectedDevice,
+                      items: _devices.map((device) {
+                        return DropdownMenuItem(
+                          value: device,
+                          child: Text(device.name ?? 'Unknown Device'),
+                        );
+                      }).toList(),
+                      onChanged: (val) => setState(() => _selectedDevice = val),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Expanded(
+            child: PdfPreview(
+              build: (format) => _generatePdfReceipt(format),
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  Future<Uint8List> _generatePdfReceipt(PdfPageFormat format) async {
+    final pdf = pw.Document();
+
+    pdf.addPage(
+      pw.Page(
+        pageFormat: format,
+        build: (pw.Context context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Center(
+                child: pw.Text(
+                  widget.shopName,
+                  style: pw.TextStyle(
+                    fontSize: 20,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+              ),
+              pw.Center(child: pw.Text("Official Purchase Receipt")),
+              pw.Divider(),
+              pw.Text("Receipt ID: ${widget.sale.id}"),
+              pw.Text("Date: ${widget.sale.createdAt.toString()}"),
+              pw.Text("Payment Mode: ${widget.sale.paymentMethod}"),
+              if (widget.sale.mpesaCode.isNotEmpty)
+                pw.Text("M-Pesa Code: ${widget.sale.mpesaCode}"),
+              pw.SizedBox(height: 10),
+              pw.TableHelper.fromTextArray(
+                headers: ['Item', 'Qty', 'Unit (KES)', 'Total (KES)'],
+                data: widget.sale.items.map((item) {
+                  return [
+                    item.productName,
+                    item.quantity.toString(),
+                    item.unitPrice.toStringAsFixed(0),
+                    (item.quantity * item.unitPrice).toStringAsFixed(0),
+                  ];
+                }).toList(),
+              ),
+              pw.Divider(),
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text(
+                    "TOTAL AMOUNT:",
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                  ),
+                  pw.Text(
+                    "KES ${widget.sale.totalAmount.toStringAsFixed(0)}",
+                    style: pw.TextStyle(
+                      fontWeight: pw.FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ],
+              ),
+              pw.SizedBox(height: 20),
+              pw.Center(child: pw.Text("Thank you for shopping with us!")),
+            ],
+          );
+        },
+      ),
+    );
+
+    final List<int> pdfData = await pdf.save();
+    return Uint8List.fromList(pdfData);
   }
 }
