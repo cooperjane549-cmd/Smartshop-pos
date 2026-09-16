@@ -1,40 +1,61 @@
-name: Android CI Build
+name: Flutter Build & Release Signed APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches:
+      - main
   pull_request:
-    branches: [ "main", "master" ]
+    branches:
+      - main
 
 jobs:
   build:
+    name: Build Signed Android APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout project source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up Java Development Kit (JDK)
         uses: actions/setup-java@v4
         with:
+          distribution: 'zulu'
           java-version: '17'
-          distribution: 'temurin'
-          cache: gradle
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Set up Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+          cache: true
 
-      - name: Inject google-services.json from GitHub Secrets
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+      - name: Decode Google Services JSON
         run: |
-          echo "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 --decode > android/app/google-services.json
 
-      - name: Build Android APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Install dependencies
+        run: flutter pub get
 
-      - name: Upload Build Artifact
+      - name: Decode Android Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+
+      - name: Create key.properties
+        run: |
+          cat <<EOF > android/key.properties
+          storePassword=${{ secrets.KEY_STORE_PASSWORD }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          storeFile=upload-keystore.jks
+          EOF
+
+      - name: Build Signed Release APK
+        run: flutter build apk --release
+
+      - name: Upload Signed APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: release-signed-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
