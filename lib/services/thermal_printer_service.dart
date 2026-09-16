@@ -1,42 +1,43 @@
+import 'dart:typed_data';
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
-import '../models/sale_transaction.dart';
 
 class ThermalPrinterService {
-  BlueThermalPrinter bluetooth = BlueThermalPrinter.instance;
+  final BlueThermalPrinter _bluetooth = BlueThermalPrinter.instance;
 
-  Future<List<BluetoothDevice>> getPairedDevices() async {
-    return await bluetooth.getBondedDevices();
+  Future<bool> isConnected() async {
+    return (await _bluetooth.isConnected) ?? false;
   }
 
-  Future<void> printReceipt(
-      BluetoothDevice device, SaleTransaction sale, String shopName) async {
-    bool? isConnected = await bluetooth.isConnected;
-    if (isConnected != true) {
-      await bluetooth.connect(device);
-    }
+  Future<List<BluetoothDevice>> getBondedDevices() async {
+    return await _bluetooth.getBondedDevices();
+  }
 
-    bluetooth.printNewLine();
-    bluetooth.printCustom(shopName, 3, 1);
-    bluetooth.printCustom("SmartShop POS Receipt", 1, 1);
-    bluetooth.printCustom("--------------------------------", 1, 1);
+  Future<void> connect(BluetoothDevice device) async {
+    await _bluetooth.connect(device);
+  }
 
-    for (var item in sale.items) {
-      bluetooth.printLeftRight(
-          "${item.productName} x${item.quantity}",
-          "KES ${(item.unitPrice * item.quantity).toStringAsFixed(0)}",
-          1);
-    }
+  Future<void> disconnect() async {
+    await _bluetooth.disconnect();
+  }
 
-    bluetooth.printCustom("--------------------------------", 1, 1);
-    bluetooth.printLeftRight(
-        "TOTAL", "KES ${sale.totalAmount.toStringAsFixed(0)}", 2);
-    bluetooth.printLeftRight("Payment Mode", sale.paymentMethod, 1);
-    if (sale.mpesaCode.isNotEmpty) {
-      bluetooth.printLeftRight("M-Pesa Ref", sale.mpesaCode, 1);
+  Future<void> printReceiptBytes(Uint8List bytes) async {
+    final bool? connected = await _bluetooth.isConnected;
+    if (connected == true) {
+      // Replaced undefined printPaper with writeBytes for raw ESC/POS byte data
+      await _bluetooth.writeBytes(bytes);
+    } else {
+      throw Exception('Printer is not connected.');
     }
-    bluetooth.printCustom("--------------------------------", 1, 1);
-    bluetooth.printCustom("Thank you for your business!", 1, 1);
-    bluetooth.printNewLine();
-    bluetooth.printPaper();
+  }
+
+  Future<void> printTextSample(String title, String message) async {
+    final bool? connected = await _bluetooth.isConnected;
+    if (connected == true) {
+      _bluetooth.printCustom(title, 3, 1);
+      _bluetooth.printNewLine();
+      _bluetooth.printCustom(message, 1, 0);
+      _bluetooth.printNewLine();
+      _bluetooth.paperCut();
+    }
   }
 }
