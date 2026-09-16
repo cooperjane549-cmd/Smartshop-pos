@@ -30,7 +30,7 @@ android {
             if (keyPropertiesFile.exists()) {
                 keyAlias keyProperties['keyAlias']
                 keyPassword keyProperties['keyPassword']
-                storeFile keyProperties['storeFile'] ? file(keyProperties['storeFile']) : null
+                storeFile keyProperties['storeFile'] ? file(keyProperties['storeFile']) : file('upload-keystore.jks')
                 storePassword keyProperties['storePassword']
             }
         }
