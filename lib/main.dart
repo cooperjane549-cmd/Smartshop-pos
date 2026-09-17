@@ -10,14 +10,13 @@ import 'views/inventory_view.dart';
 import 'views/debt_book_view.dart';
 
 void main() async {
+  // Ensure native bindings are attached before running any plugin calls
   WidgetsFlutterBinding.ensureInitialized();
-  
   try {
     await Firebase.initializeApp();
   } catch (e) {
     debugPrint("Firebase initialization non-fatal warning: $e");
   }
-
   runApp(const SmartShopApp());
 }
 
@@ -63,13 +62,10 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     try {
       final prodData = await LocalDbService.instance.getProducts();
       final saleData = await LocalDbService.instance.getSales();
-
       if (!mounted) return;
-
       setState(() {
         _products.clear();
         _products.addAll(prodData.map((e) => Product.fromMap(e)));
-
         _sales.clear();
         _sales.addAll(saleData.map((e) => SaleTransaction.fromMap(e)));
       });
@@ -82,13 +78,10 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     try {
       bool granted = await _smsService.requestSmsPermissions();
       if (!granted || !mounted) return;
-
       _smsService.startListening((payment) {
         if (!mounted) return;
-
         String? matchedCode;
         double? matchedAmount;
-
         setState(() {
           for (var sale in _sales) {
             if (!sale.isPaid && sale.totalAmount == payment.amount) {
@@ -101,7 +94,7 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
             }
           }
         });
-
+        // Safely trigger SnackBar outside the rebuild loop
         if (matchedCode != null && mounted) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
