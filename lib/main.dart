@@ -60,6 +60,8 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     final prodData = await LocalDbService.instance.getProducts();
     final saleData = await LocalDbService.instance.getSales();
 
+    if (!mounted) return;
+
     setState(() {
       _products.clear();
       _products.addAll(prodData.map((e) => Product.fromMap(e)));
@@ -71,27 +73,43 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
 
   void _initSmsListener() async {
     bool granted = await _smsService.requestSmsPermissions();
-    if (granted) {
-      _smsService.startListening((payment) {
-        setState(() {
-          for (var sale in _sales) {
-            if (!sale.isPaid && sale.totalAmount == payment.amount) {
-              sale.isPaid = true;
-              sale.mpesaCode = payment.code;
-              LocalDbService.instance.markSalePaid(sale.id, payment.code);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: Colors.green,
-                  content: Text(
-                      'Auto-Matched M-Pesa Code ${payment.code} for KES ${payment.amount}!'),
+    if (!granted || !mounted) return;
+
+    _smsService.startListening((payment) {
+      if (!mounted) return;
+
+      String? matchedCode;
+      double? matchedAmount;
+
+      setState(() {
+        for (var sale in _sales) {
+          if (!sale.isPaid && sale.totalAmount == payment.amount) {
+            sale.isPaid = true;
+            sale.mpesaCode = payment.code;
+            LocalDbService.instance.markSalePaid(sale.id, payment.code);
+            matchedCode = payment.code;
+            matchedAmount = payment.amount;
+            break;
+          }
+        }
+      });
+
+      // Show SnackBar safely outside of the setState execution loop
+      if (matchedCode != null && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                backgroundColor: Colors.green,
+                content: Text(
+                  'Auto-Matched M-Pesa Code $matchedCode for KES $matchedAmount!',
                 ),
-              );
-              break;
-            }
+              ),
+            );
           }
         });
-      });
-    }
+      }
+    });
   }
 
   @override
@@ -126,16 +144,25 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
         currentIndex: _currentIndex,
         selectedItemColor: Colors.indigo,
         unselectedItemColor: Colors.grey,
+        type: BottomNavigationBarType.fixed,
         onTap: (idx) => setState(() => _currentIndex = idx),
         items: const [
           BottomNavigationBarItem(
-              icon: Icon(Icons.dashboard), label: 'Summary'),
+            icon: Icon(Icons.dashboard),
+            label: 'Summary',
+          ),
           BottomNavigationBarItem(
-              icon: Icon(Icons.point_of_sale), label: 'Register'),
+            icon: Icon(Icons.point_of_sale),
+            label: 'Register',
+          ),
           BottomNavigationBarItem(
-              icon: Icon(Icons.inventory), label: 'Stock'),
+            icon: Icon(Icons.inventory),
+            label: 'Stock',
+          ),
           BottomNavigationBarItem(
-              icon: Icon(Icons.book), label: 'Debtors'),
+            icon: Icon(Icons.book),
+            label: 'Debtors',
+          ),
         ],
       ),
     );
