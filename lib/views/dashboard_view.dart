@@ -1,3 +1,4 @@
+
 import 'package:flutter/material.dart';
 import '../models/sale_transaction.dart';
 
@@ -6,23 +7,19 @@ class DashboardView extends StatelessWidget {
 
   const DashboardView({Key? key, required this.sales}) : super(key: key);
 
-  double get _cashRevenue {
-    return sales
-        .where((s) => s.paymentMode == 'CASH' && s.isPaid)
-        .fold(0.0, (sum, item) => sum + item.totalAmount);
-  }
+  double get cashCollected => sales
+      .where((s) => s.paymentMethod == 'CASH')
+      .fold(0, (sum, s) => sum + s.totalAmount);
 
-  double get _mpesaRevenue {
-    return sales
-        .where((s) => s.paymentMode == 'M-PESA' && s.isPaid)
-        .fold(0.0, (sum, item) => sum + item.totalAmount);
-  }
+  double get mpesaCollected => sales
+      .where((s) =>
+          s.paymentMethod == 'MPESA' ||
+          (s.paymentMethod == 'CREDIT' && s.isPaid))
+      .fold(0, (sum, s) => sum + s.totalAmount);
 
-  double get _uncollectedCredit {
-    return sales
-        .where((s) => !s.isPaid)
-        .fold(0.0, (sum, item) => sum + item.totalAmount);
-  }
+  double get openCredit => sales
+      .where((s) => s.paymentMethod == 'CREDIT' && !s.isPaid)
+      .fold(0, (sum, s) => sum + s.totalAmount);
 
   @override
   Widget build(BuildContext context) {
@@ -32,7 +29,7 @@ class DashboardView extends StatelessWidget {
         backgroundColor: Colors.indigo,
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -44,54 +41,46 @@ class DashboardView extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: _RevenueCard(
-                    title: 'Cash',
-                    amount: _cashRevenue,
-                    color: Colors.green.shade50,
-                    textColor: Colors.green.shade800,
+                  child: _buildTile(
+                    'Cash',
+                    'KES ${cashCollected.toStringAsFixed(0)}',
+                    Colors.green,
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
-                  child: _RevenueCard(
-                    title: 'M-Pesa',
-                    amount: _mpesaRevenue,
-                    color: Colors.blue.shade50,
-                    textColor: Colors.blue.shade800,
+                  child: _buildTile(
+                    'M-Pesa',
+                    'KES ${mpesaCollected.toStringAsFixed(0)}',
+                    Colors.blue,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            _RevenueCard(
-              title: 'Uncollected Credit',
-              amount: _uncollectedCredit,
-              color: Colors.red.shade50,
-              textColor: Colors.red.shade800,
+            const SizedBox(height: 10),
+            _buildTile(
+              'Uncollected Credit',
+              'KES ${openCredit.toStringAsFixed(0)}',
+              Colors.red,
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
             const Text(
-              'Recent Sales Details',
+              'Recent Sales',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             sales.isEmpty
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24.0),
-                      child: Text('No recorded sales yet.'),
-                    ),
-                  )
+                ? const Text('No transactions completed today.')
                 : ListView.builder(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
                     itemCount: sales.length,
-                    itemBuilder: (context, index) {
-                      final sale = sales.reversed.toList()[index];
+                    itemBuilder: (context, idx) {
+                      final sale = sales[sales.length - 1 - idx];
                       return Card(
                         margin: const EdgeInsets.symmetric(vertical: 6),
                         child: Padding(
-                          padding: const EdgeInsets.all(12.0),
+                          padding: const EdgeInsets.all(12),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -100,7 +89,7 @@ class DashboardView extends StatelessWidget {
                                     MainAxisAlignment.spaceBetween,
                                 children: [
                                   Text(
-                                    sale.id,
+                                    'Sale ${sale.id}',
                                     style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 14,
@@ -108,39 +97,42 @@ class DashboardView extends StatelessWidget {
                                   ),
                                   Text(
                                     'KES ${sale.totalAmount.toStringAsFixed(0)}',
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontWeight: FontWeight.bold,
-                                      color: Colors.green,
                                       fontSize: 16,
+                                      color: sale.isPaid
+                                          ? Colors.green
+                                          : Colors.red,
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 6),
+                              const SizedBox(height: 4),
                               Text(
-                                'Mode: ${sale.paymentMode} | Status: ${sale.isPaid ? "PAID" : "UNPAID"}',
+                                'Mode: ${sale.paymentMethod} | Status: ${sale.isPaid ? "PAID" : "UNPAID"}',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: Colors.grey[700],
                                 ),
                               ),
-                              if (sale.mpesaCode != null &&
-                                  sale.mpesaCode!.isNotEmpty)
+                              if (sale.customerName != null &&
+                                  sale.customerName!.isNotEmpty)
                                 Text(
-                                  'M-Pesa Code: ${sale.mpesaCode}',
-                                  style: const TextStyle(
+                                  'Customer: ${sale.customerName} (${sale.customerPhone ?? "No Phone"})',
+                                  style: TextStyle(
                                     fontSize: 12,
-                                    color: Colors.blue,
+                                    color: Colors.grey[800],
                                   ),
                                 ),
                               const Divider(height: 12),
                               const Text(
-                                'Items:',
+                                'Purchased Items:',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 12,
                                 ),
                               ),
+                              const SizedBox(height: 4),
                               ...sale.items.map(
                                 (item) => Padding(
                                   padding: const EdgeInsets.symmetric(
@@ -167,55 +159,33 @@ class DashboardView extends StatelessWidget {
                         ),
                       );
                     },
-                  ),
+                  )
           ],
         ),
       ),
     );
   }
-}
 
-class _RevenueCard extends StatelessWidget {
-  final String title;
-  final double amount;
-  final Color color;
-  final Color textColor;
-
-  const _RevenueCard({
-    Key? key,
-    required this.title,
-    required this.amount,
-    required this.color,
-    required this.textColor,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildTile(String title, String value, Color color) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: textColor.withOpacity(0.3)),
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text(title,
+              style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
           Text(
-            title,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: textColor,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'KES ${amount.toStringAsFixed(0)}',
+            value,
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
-              color: textColor,
+              color: color,
             ),
           ),
         ],
