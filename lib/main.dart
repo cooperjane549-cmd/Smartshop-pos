@@ -10,7 +10,6 @@ import 'views/inventory_view.dart';
 import 'views/debt_book_view.dart';
 
 void main() async {
-  // Ensure native bindings are attached before running any plugin calls
   WidgetsFlutterBinding.ensureInitialized();
   
   try {
@@ -103,7 +102,6 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
           }
         });
 
-        // Safely trigger SnackBar outside the rebuild loop
         if (matchedCode != null && mounted) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
@@ -124,6 +122,14 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     }
   }
 
+  void _switchToDebtorsTab() {
+    if (mounted) {
+      setState(() {
+        _currentIndex = 3;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final views = [
@@ -135,6 +141,7 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
             setState(() => _sales.add(sale));
           }
         },
+        onCreditSelected: _switchToDebtorsTab,
       ),
       InventoryView(
         products: _products,
@@ -182,7 +189,7 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.point_of_sale),
-            label: 'Register',
+            label: 'Sell',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.inventory),
