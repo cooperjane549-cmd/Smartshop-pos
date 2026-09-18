@@ -78,38 +78,40 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     try {
       bool granted = await _smsService.requestSmsPermissions();
       if (!granted || !mounted) return;
-      _smsService.startListening((payment) {
-        if (!mounted) return;
-        String? matchedCode;
-        double? matchedAmount;
-        setState(() {
-          for (var sale in _sales) {
-            if (!sale.isPaid && sale.totalAmount == payment.amount) {
-              sale.isPaid = true;
-              sale.mpesaCode = payment.code;
-              LocalDbService.instance.markSalePaid(sale.id, payment.code);
-              matchedCode = payment.code;
-              matchedAmount = payment.amount;
-              break;
-            }
-          }
-        });
-        // Safely trigger SnackBar outside the rebuild loop
-        if (matchedCode != null && mounted) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: Colors.green,
-                  content: Text(
-                    'Auto-Matched M-Pesa Code $matchedCode for KES $matchedAmount!',
-                  ),
-                ),
-              );
+      _smsService.startListening(
+        onPaymentDetected: (payment) {
+          if (!mounted) return;
+          String? matchedCode;
+          double? matchedAmount;
+          setState(() {
+            for (var sale in _sales) {
+              if (!sale.isPaid && sale.totalAmount == payment.amount) {
+                sale.isPaid = true;
+                sale.mpesaCode = payment.code;
+                LocalDbService.instance.markSalePaid(sale.id, payment.code);
+                matchedCode = payment.code;
+                matchedAmount = payment.amount;
+                break;
+              }
             }
           });
-        }
-      });
+          // Safely trigger SnackBar outside the rebuild loop
+          if (matchedCode != null && mounted) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: Colors.green,
+                    content: Text(
+                      'Auto-Matched M-Pesa Code $matchedCode for KES $matchedAmount!',
+                    ),
+                  ),
+                );
+              }
+            });
+          }
+        },
+      );
     } catch (e) {
       debugPrint("SMS Listener permission or runtime error: $e");
     }
@@ -141,6 +143,23 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
         onProductAdded: (p) {
           if (mounted) {
             setState(() => _products.add(p));
+          }
+        },
+        onProductUpdated: (p) {
+          if (mounted) {
+            setState(() {
+              int idx = _products.indexWhere((item) => item.id == p.id);
+              if (idx >= 0) {
+                _products[idx] = p;
+              }
+            });
+          }
+        },
+        onProductDeleted: (id) {
+          if (mounted) {
+            setState(() {
+              _products.removeWhere((item) => item.id == id);
+            });
           }
         },
       ),
