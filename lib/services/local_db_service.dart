@@ -73,6 +73,15 @@ class LocalDbService {
     );
   }
 
+  Future<void> deleteProduct(String id) async {
+    final db = await instance.database;
+    await db.delete(
+      'products',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<void> insertSale(Map<String, dynamic> saleMap) async {
     final db = await instance.database;
     await db.insert('sales', saleMap,
