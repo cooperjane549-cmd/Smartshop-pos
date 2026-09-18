@@ -50,6 +50,8 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
   final List<Product> _products = [];
   final List<SaleTransaction> _sales = [];
   final SmsParserService _smsService = SmsParserService();
+  String _storeTillNumber = '';
+  bool _isSubscribed = false;
 
   @override
   void initState() {
@@ -79,6 +81,7 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
       bool granted = await _smsService.requestSmsPermissions();
       if (!granted || !mounted) return;
       _smsService.startListening(
+        storeTillNumber: _storeTillNumber,
         currentSales: _sales,
         onPaymentDetected: (payment) {
           if (!mounted) return;
@@ -111,6 +114,23 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
               }
             });
           }
+        },
+        onDebtAutoCleared: (saleId, mpesaCode) {
+          if (!mounted) return;
+          setState(() {
+            int idx = _sales.indexWhere((s) => s.id == saleId);
+            if (idx >= 0) {
+              _sales[idx].isPaid = true;
+              _sales[idx].mpesaCode = mpesaCode;
+              LocalDbService.instance.markSalePaid(saleId, mpesaCode);
+            }
+          });
+        },
+        onSubscriptionUpdated: (subscribed, expiry) {
+          if (!mounted) return;
+          setState(() {
+            _isSubscribed = subscribed;
+          });
         },
       );
     } catch (e) {
