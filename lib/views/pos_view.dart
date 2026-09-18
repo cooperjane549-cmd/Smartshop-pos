@@ -67,6 +67,98 @@ class _PosViewState extends State<PosView> {
   double get cartTotal =>
       _cart.fold(0, (sum, item) => sum + (item.unitPrice * item.quantity));
 
+  void _showCreditCustomerDialog() {
+    _customerNameController.clear();
+    _customerPhoneController.clear();
+    _selectedDueDate = null;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return AlertDialog(
+              title: const Text('Credit Sale Details (Mkopo)'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: _customerNameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Customer Name *',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _customerPhoneController,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(labelText: 'Customer Phone *', border: OutlineInputBorder()),
+                    ),
+                    const SizedBox(height: 10),
+                    ListTile(
+                      shape: RoundedRectangleBorder(
+                        side: const BorderSide(color: Colors.grey),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      title: Text(
+                        _selectedDueDate == null
+                            ? 'Select Payment Due Date'
+                            : 'Due: ${_selectedDueDate.toString().split(' ')[0]}',
+                      ),
+                      trailing: const Icon(Icons.calendar_today, color: Colors.indigo),
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: DateTime.now().add(const Duration(days: 7)),
+                          firstDate: DateTime.now(),
+                          lastDate: DateTime.now().add(const Duration(days: 365)),
+                        );
+                        if (picked != null) {
+                          setModalState(() {
+                            _selectedDueDate = picked;
+                          });
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _paymentMethod = 'CASH';
+                    });
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
+                  onPressed: () {
+                    if (_customerNameController.text.trim().isEmpty ||
+                        _customerPhoneController.text.trim().isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Please fill name and phone number.')),
+                      );
+                      return;
+                    }
+                    Navigator.pop(ctx);
+                    _completeCheckout();
+                  },
+                  child: const Text('Save Credit Sale', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _completeCheckout() async {
     if (_cart.isEmpty) return;
 
@@ -87,8 +179,8 @@ class _PosViewState extends State<PosView> {
       paymentMethod: _paymentMethod,
       isPaid: _paymentMethod != 'CREDIT',
       items: List.from(_cart),
-      customerName: _customerNameController.text,
-      customerPhone: _customerPhoneController.text,
+      customerName: _customerNameController.text.trim(),
+      customerPhone: _customerPhoneController.text.trim(),
       dueDate: _selectedDueDate,
       createdAt: DateTime.now(),
     );
@@ -103,8 +195,8 @@ class _PosViewState extends State<PosView> {
     if (_paymentMethod == 'CREDIT' &&
         _customerPhoneController.text.isNotEmpty) {
       _sendCreditWhatsAppNudge(
-        _customerPhoneController.text,
-        _customerNameController.text,
+        _customerPhoneController.text.trim(),
+        _customerNameController.text.trim(),
         cartTotal,
       );
     }
@@ -129,10 +221,17 @@ class _PosViewState extends State<PosView> {
 
   void _sendCreditWhatsAppNudge(
       String phone, String name, double amount) async {
+    String cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleanPhone.startsWith('0')) {
+      cleanPhone = '254${cleanPhone.substring(1)}';
+    } else if (cleanPhone.startsWith('+')) {
+      cleanPhone = cleanPhone.substring(1);
+    }
+
     final message =
         "Hello $name, this confirms your credit purchase of KES ${amount.toStringAsFixed(0)} at SmartShop POS. Please clear via M-Pesa at your earliest convenience.";
     final uri = Uri.parse(
-        "https://wa.me/$phone?text=${Uri.encodeComponent(message)}");
+        "https://wa.me/$cleanPhone?text=${Uri.encodeComponent(message)}");
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
@@ -167,7 +266,7 @@ class _PosViewState extends State<PosView> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.indigo,
                       ),
-                      child: Text('+ KES ${p.sellingPrice.toStringAsFixed(0)}'),
+                      child: Text('+ KES ${p.sellingPrice.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white)),
                     ),
                   ),
                 );
@@ -240,35 +339,37 @@ class _PosViewState extends State<PosView> {
                           label: const Center(child: Text('CASH')),
                           selected: _paymentMethod == 'CASH',
                           selectedColor: Colors.indigo.shade100,
-                          onSelected: (s) =>
-                              setState(() => _paymentMethod = 'CASH'),
+                          onSelected: (s) {
+                            setState(() => _paymentMethod = 'CASH');
+                          },
                         ),
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 4),
                       Expanded(
                         child: ChoiceChip(
                           label: const Center(child: Text('M-PESA')),
                           selected: _paymentMethod == 'MPESA',
                           selectedColor: Colors.indigo.shade100,
-                          onSelected: (s) =>
-                              setState(() => _paymentMethod = 'MPESA'),
+                          onSelected: (s) {
+                            setState(() => _paymentMethod = 'MPESA');
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: ChoiceChip(
+                          label: const Center(child: Text('CREDIT')),
+                          selected: _paymentMethod == 'CREDIT',
+                          selectedColor: Colors.orange.shade100,
+                          onSelected: (s) {
+                            setState(() => _paymentMethod = 'CREDIT');
+                            if (_cart.isNotEmpty) {
+                              _showCreditCustomerDialog();
+                            }
+                          },
                         ),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: widget.onCreditSelected,
-                    icon: const Icon(Icons.book, color: Colors.orange),
-                    label: const Text(
-                      'CREDIT SALE (GO TO DEBTORS)',
-                      style: TextStyle(
-                          color: Colors.orange, fontWeight: FontWeight.bold),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.orange),
-                      minimumSize: const Size.fromHeight(40),
-                    ),
                   ),
                   const SizedBox(height: 10),
                   SizedBox(
@@ -278,7 +379,15 @@ class _PosViewState extends State<PosView> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.indigo,
                       ),
-                      onPressed: _cart.isEmpty ? null : _completeCheckout,
+                      onPressed: _cart.isEmpty
+                          ? null
+                          : () {
+                              if (_paymentMethod == 'CREDIT') {
+                                _showCreditCustomerDialog();
+                              } else {
+                                _completeCheckout();
+                              }
+                            },
                       child: const Text(
                         'Complete & Receipt',
                         style: TextStyle(
