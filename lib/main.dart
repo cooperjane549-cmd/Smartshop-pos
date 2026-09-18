@@ -8,6 +8,7 @@ import 'views/dashboard_view.dart';
 import 'views/pos_view.dart';
 import 'views/inventory_view.dart';
 import 'views/debt_book_view.dart';
+import 'views/auth_gate.dart';
 
 void main() async {
   // Ensure native bindings are attached before running any plugin calls
@@ -33,7 +34,7 @@ class SmartShopApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFFF4F6F8),
         useMaterial3: false,
       ),
-      home: const MainNavigationHub(),
+      home: const AuthGate(),
     );
   }
 }
