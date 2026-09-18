@@ -4,17 +4,22 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:blue_thermal_printer/blue_thermal_printer.dart' as bt;
+import 'package:url_launcher/url_launcher.dart';
 import '../models/sale_transaction.dart';
 import '../services/thermal_printer_service.dart';
 
 class ReceiptView extends StatefulWidget {
   final SaleTransaction sale;
   final String shopName;
+  final String shopPhone;
+  final String shopAddress;
 
   const ReceiptView({
     Key? key,
     required this.sale,
     this.shopName = 'SMARTSHOP POS',
+    this.shopPhone = '',
+    this.shopAddress = '',
   }) : super(key: key);
 
   @override
@@ -34,6 +39,7 @@ class _ReceiptViewState extends State<ReceiptView> {
 
   void _loadBluetoothDevices() async {
     List<bt.BluetoothDevice> list = await _printerService.getBondedDevices();
+    if (!mounted) return;
     setState(() {
       _devices = list;
       if (_devices.isNotEmpty) _selectedDevice = _devices.first;
@@ -46,12 +52,70 @@ class _ReceiptViewState extends State<ReceiptView> {
         widget.shopName,
         "Total: KES ${widget.sale.totalAmount.toStringAsFixed(0)}",
       );
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Receipt sent to printer!')),
       );
     } else {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No Bluetooth printer selected.')),
+      );
+    }
+  }
+
+  Future<void> _sendWhatsAppReceipt() async {
+    String? phone = widget.sale.customerPhone;
+    if (phone == null || phone.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No customer phone number available for this sale.'),
+        ),
+      );
+      return;
+    }
+
+    String cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleanPhone.startsWith('0')) {
+      cleanPhone = '254${cleanPhone.substring(1)}';
+    } else if (cleanPhone.startsWith('+')) {
+      cleanPhone = cleanPhone.substring(1);
+    }
+
+    StringBuffer buffer = StringBuffer();
+    buffer.writeln("*${widget.shopName.toUpperCase()}*");
+    if (widget.shopAddress.isNotEmpty) buffer.writeln(widget.shopAddress);
+    if (widget.shopPhone.isNotEmpty) buffer.writeln("Tel: ${widget.shopPhone}");
+    buffer.writeln("--------------------------------");
+    buffer.writeln("Receipt ID: ${widget.sale.id}");
+    buffer.writeln("Date: ${widget.sale.createdAt.toString().split('.')[0]}");
+    buffer.writeln("Payment Method: ${widget.sale.paymentMethod}");
+    if (widget.sale.mpesaCode.isNotEmpty) {
+      buffer.writeln("M-Pesa Code: ${widget.sale.mpesaCode}");
+    }
+    buffer.writeln("--------------------------------");
+    buffer.writeln("*ITEMS PURCHASED:*");
+    for (var item in widget.sale.items) {
+      buffer.writeln(
+        "• ${item.productName} x${item.quantity} - KES ${(item.quantity * item.unitPrice).toStringAsFixed(0)}",
+      );
+    }
+    buffer.writeln("--------------------------------");
+    buffer.writeln(
+      "*TOTAL: KES ${widget.sale.totalAmount.toStringAsFixed(0)}*",
+    );
+    buffer.writeln("\nThank you for shopping with us!");
+
+    final uri = Uri.parse(
+      "https://wa.me/$cleanPhone?text=${Uri.encodeComponent(buffer.toString())}",
+    );
+
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open WhatsApp.')),
       );
     }
   }
@@ -64,9 +128,15 @@ class _ReceiptViewState extends State<ReceiptView> {
         backgroundColor: Colors.indigo,
         actions: [
           IconButton(
+            icon: const Icon(Icons.share),
+            tooltip: 'Send via WhatsApp',
+            onPressed: _sendWhatsAppReceipt,
+          ),
+          IconButton(
             icon: const Icon(Icons.print),
+            tooltip: 'Print Thermal Receipt',
             onPressed: _printThermal,
-          )
+          ),
         ],
       ),
       body: Column(
@@ -95,6 +165,10 @@ class _ReceiptViewState extends State<ReceiptView> {
           Expanded(
             child: PdfPreview(
               build: (format) => _generatePdfReceipt(format),
+              allowPrinting: false,
+              allowSharing: false,
+              canChangePageFormat: false,
+              canChangeOrientation: false,
             ),
           ),
         ],
@@ -121,11 +195,31 @@ class _ReceiptViewState extends State<ReceiptView> {
                   ),
                 ),
               ),
+              if (widget.shopAddress.isNotEmpty)
+                pw.Center(
+                  child: pw.Text(
+                    widget.shopAddress,
+                    style: const pw.TextStyle(fontSize: 10),
+                  ),
+                ),
+              if (widget.shopPhone.isNotEmpty)
+                pw.Center(
+                  child: pw.Text(
+                    "Tel: ${widget.shopPhone}",
+                    style: const pw.TextStyle(fontSize: 10),
+                  ),
+                ),
               pw.Center(child: pw.Text("Official Purchase Receipt")),
               pw.Divider(),
               pw.Text("Receipt ID: ${widget.sale.id}"),
-              pw.Text("Date: ${widget.sale.createdAt.toString()}"),
+              pw.Text("Date: ${widget.sale.createdAt.toString().split('.')[0]}"),
               pw.Text("Payment Mode: ${widget.sale.paymentMethod}"),
+              if (widget.sale.customerName != null &&
+                  widget.sale.customerName!.isNotEmpty)
+                pw.Text("Customer: ${widget.sale.customerName}"),
+              if (widget.sale.customerPhone != null &&
+                  widget.sale.customerPhone!.isNotEmpty)
+                pw.Text("Phone: ${widget.sale.customerPhone}"),
               if (widget.sale.mpesaCode.isNotEmpty)
                 pw.Text("M-Pesa Code: ${widget.sale.mpesaCode}"),
               pw.SizedBox(height: 10),
