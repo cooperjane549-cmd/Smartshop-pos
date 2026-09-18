@@ -79,6 +79,7 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
       bool granted = await _smsService.requestSmsPermissions();
       if (!granted || !mounted) return;
       _smsService.startListening(
+        currentSales: _sales,
         onPaymentDetected: (payment) {
           if (!mounted) return;
           String? matchedCode;
