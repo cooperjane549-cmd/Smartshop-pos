@@ -95,7 +95,10 @@ class _PosViewState extends State<PosView> {
                     TextField(
                       controller: _customerPhoneController,
                       keyboardType: TextInputType.phone,
-                      decoration: const InputDecoration(labelText: 'Customer Phone *', border: OutlineInputBorder()),
+                      decoration: const InputDecoration(
+                        labelText: 'Customer Phone *',
+                        border: OutlineInputBorder(),
+                      ),
                     ),
                     const SizedBox(height: 10),
                     ListTile(
@@ -162,6 +165,7 @@ class _PosViewState extends State<PosView> {
   void _completeCheckout() async {
     if (_cart.isEmpty) return;
 
+    // Deduct stock locally & via database
     for (var cartItem in _cart) {
       int pIdx = widget.products.indexWhere((p) => p.id == cartItem.productId);
       if (pIdx >= 0) {
@@ -185,11 +189,15 @@ class _PosViewState extends State<PosView> {
       createdAt: DateTime.now(),
     );
 
+    // Save to local database for offline resilience
     Map<String, dynamic> saleMap = sale.toMap();
     saleMap['items'] = jsonEncode(sale.items.map((e) => e.toMap()).toList());
-
     await LocalDbService.instance.insertSale(saleMap);
-    FirebaseService().syncSale(sale);
+
+    // Persist permanently to Cloud Firestore
+    await FirebaseService().syncSale(sale);
+
+    // Notify parent hub
     widget.onSaleCompleted(sale);
 
     if (_paymentMethod == 'CREDIT' &&
@@ -266,7 +274,10 @@ class _PosViewState extends State<PosView> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.indigo,
                       ),
-                      child: Text('+ KES ${p.sellingPrice.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white)),
+                      child: Text(
+                        '+ KES ${p.sellingPrice.toStringAsFixed(0)}',
+                        style: const TextStyle(color: Colors.white),
+                      ),
                     ),
                   ),
                 );
