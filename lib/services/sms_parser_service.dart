@@ -60,7 +60,7 @@ class SmsParserService {
           if (payment != null) {
             onPaymentDetected(payment);
 
-            // 1. Process App Subscription (Till 3043489)
+            // 1. Process App Subscription Verification (Till 3043489)
             if (body.contains(appTillNumber)) {
               if (payment.amount >= 1100) {
                 DateTime expiry = DateTime.now().add(const Duration(days: 365));
