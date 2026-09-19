@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'models/product.dart';
 import 'models/sale_transaction.dart';
-import 'services/local_db_service.dart';
 import 'services/sms_parser_service.dart';
 import 'views/dashboard_view.dart';
 import 'views/pos_view.dart';
@@ -51,29 +52,61 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
   final List<Product> _products = [];
   final List<SaleTransaction> _sales = [];
   final SmsParserService _smsService = SmsParserService();
-  String _storeTillNumber = '';
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  String _storeTillNumber = '3043489';
   bool _isSubscribed = false;
 
   @override
   void initState() {
     super.initState();
-    _loadLocalData();
+    _loadFirestoreData();
     _initSmsListener();
   }
 
-  void _loadLocalData() async {
+  // Load sales history permanently from Cloud Firestore so it survives refresh
+  void _loadFirestoreData() async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
     try {
-      final prodData = await LocalDbService.instance.getProducts();
-      final saleData = await LocalDbService.instance.getSales();
-      if (!mounted) return;
-      setState(() {
-        _products.clear();
-        _products.addAll(prodData.map((e) => Product.fromMap(e)));
-        _sales.clear();
-        _sales.addAll(saleData.map((e) => SaleTransaction.fromMap(e)));
+      // Stream real-time sales history
+      _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('sales')
+          .snapshots()
+          .listen((snapshot) {
+        if (!mounted) return;
+        final loadedSales = snapshot.docs
+            .map((doc) => SaleTransaction.fromMap(doc.data()))
+            .toList();
+        setState(() {
+          _sales.clear();
+          _sales.addAll(loadedSales);
+        });
+      });
+
+      // Stream subscription status
+      _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('subscription')
+          .doc('status')
+          .snapshots()
+          .listen((doc) {
+        if (!mounted || !doc.exists) return;
+        final data = doc.data();
+        if (data != null && data.containsKey('expiryDate')) {
+          final DateTime expiry = (data['expiryDate'] as Timestamp).toDate();
+          setState(() {
+            _isSubscribed = DateTime.now().isBefore(expiry);
+          });
+        }
       });
     } catch (e) {
-      debugPrint("LocalDb Service initialization error: $e");
+      debugPrint("Firestore data synchronization error: $e");
     }
   }
 
@@ -81,26 +114,39 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     try {
       bool granted = await _smsService.requestSmsPermissions();
       if (!granted || !mounted) return;
+
       _smsService.startListening(
         storeTillNumber: _storeTillNumber,
         currentSales: _sales,
-        onPaymentDetected: (payment) {
+        onPaymentDetected: (payment) async {
           if (!mounted) return;
+          final user = _auth.currentUser;
           String? matchedCode;
           double? matchedAmount;
-          setState(() {
-            for (var sale in _sales) {
-              if (!sale.isPaid && sale.totalAmount == payment.amount) {
-                sale.isPaid = true;
-                sale.mpesaCode = payment.code;
-                LocalDbService.instance.markSalePaid(sale.id, payment.code);
-                matchedCode = payment.code;
-                matchedAmount = payment.amount;
-                break;
+
+          for (var sale in _sales) {
+            if (!sale.isPaid && sale.totalAmount == payment.amount) {
+              sale.isPaid = true;
+              sale.mpesaCode = payment.code;
+              matchedCode = payment.code;
+              matchedAmount = payment.amount;
+
+              // Update Firestore status permanently
+              if (user != null) {
+                await _firestore
+                    .collection('users')
+                    .doc(user.uid)
+                    .collection('sales')
+                    .doc(sale.id)
+                    .update({
+                  'isPaid': true,
+                  'mpesaCode': payment.code,
+                });
               }
+              break;
             }
-          });
-          // Safely trigger SnackBar outside the rebuild loop
+          }
+
           if (matchedCode != null && mounted) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) {
@@ -116,22 +162,36 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
             });
           }
         },
-        onDebtAutoCleared: (saleId, mpesaCode) {
+        onDebtAutoCleared: (saleId, mpesaCode) async {
           if (!mounted) return;
-          setState(() {
-            int idx = _sales.indexWhere((s) => s.id == saleId);
-            if (idx >= 0) {
-              _sales[idx].isPaid = true;
-              _sales[idx].mpesaCode = mpesaCode;
-              LocalDbService.instance.markSalePaid(saleId, mpesaCode);
-            }
-          });
+          final user = _auth.currentUser;
+          if (user != null) {
+            await _firestore
+                .collection('users')
+                .doc(user.uid)
+                .collection('sales')
+                .doc(saleId)
+                .update({
+              'isPaid': true,
+              'mpesaCode': mpesaCode,
+            });
+          }
         },
-        onSubscriptionUpdated: (subscribed, expiry) {
+        onSubscriptionUpdated: (subscribed, expiry) async {
           if (!mounted) return;
-          setState(() {
-            _isSubscribed = subscribed;
-          });
+          final user = _auth.currentUser;
+          if (user != null) {
+            await _firestore
+                .collection('users')
+                .doc(user.uid)
+                .collection('subscription')
+                .doc('status')
+                .set({
+              'isSubscribed': subscribed,
+              'expiryDate': Timestamp.fromDate(expiry),
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+          }
         },
       );
     } catch (e) {
@@ -147,6 +207,23 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     }
   }
 
+  // Save newly generated sales to Firestore immediately upon completion
+  void _handleSaleCompleted(SaleTransaction sale) async {
+    final user = _auth.currentUser;
+    if (user != null) {
+      try {
+        await _firestore
+            .collection('users')
+            .doc(user.uid)
+            .collection('sales')
+            .doc(sale.id)
+            .set(sale.toMap());
+      } catch (e) {
+        debugPrint("Error saving completed sale to Firestore: $e");
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final views = [
@@ -154,9 +231,7 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
       PosView(
         products: _products,
         onSaleCompleted: (sale) {
-          if (mounted) {
-            setState(() => _sales.add(sale));
-          }
+          _handleSaleCompleted(sale);
         },
         onCreditSelected: _switchToDebtorsTab,
       ),
@@ -187,14 +262,17 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
       ),
       DebtBookView(
         sales: _sales,
-        onDebtCleared: (saleId, mpesaCode) {
-          if (mounted) {
-            setState(() {
-              int idx = _sales.indexWhere((s) => s.id == saleId);
-              if (idx >= 0) {
-                _sales[idx].isPaid = true;
-                _sales[idx].mpesaCode = mpesaCode;
-              }
+        onDebtCleared: (saleId, mpesaCode) async {
+          final user = _auth.currentUser;
+          if (user != null) {
+            await _firestore
+                .collection('users')
+                .doc(user.uid)
+                .collection('sales')
+                .doc(saleId)
+                .update({
+              'isPaid': true,
+              'mpesaCode': mpesaCode,
             });
           }
         },
