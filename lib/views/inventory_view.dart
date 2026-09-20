@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/product.dart';
-import '../services/local_db_service.dart';
-import '../services/firebase_service.dart';
 
 class InventoryView extends StatefulWidget {
   final List<Product> products;
@@ -22,6 +22,9 @@ class InventoryView extends StatefulWidget {
 }
 
 class _InventoryViewState extends State<InventoryView> {
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final User? _user = FirebaseAuth.instance.currentUser;
+
   final nameController = TextEditingController();
   final buyingPriceController = TextEditingController();
   final sellingPriceController = TextEditingController();
@@ -34,6 +37,12 @@ class _InventoryViewState extends State<InventoryView> {
     sellingPriceController.dispose();
     stockController.dispose();
     super.dispose();
+  }
+
+  // Get user's Firestore product collection reference
+  CollectionReference? get _productsCollection {
+    if (_user == null) return null;
+    return _firestore.collection('users').doc(_user!.uid).collection('products');
   }
 
   void _showAddProductDialog() {
@@ -81,9 +90,11 @@ class _InventoryViewState extends State<InventoryView> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
             onPressed: () async {
               if (nameController.text.isNotEmpty &&
-                  sellingPriceController.text.isNotEmpty) {
+                  sellingPriceController.text.isNotEmpty &&
+                  _productsCollection != null) {
+                final docId = DateTime.now().millisecondsSinceEpoch.toString();
                 final product = Product(
-                  id: DateTime.now().millisecondsSinceEpoch.toString(),
+                  id: docId,
                   name: nameController.text.trim(),
                   buyingPrice: double.parse(buyingPriceController.text.isEmpty
                       ? '0'
@@ -94,8 +105,8 @@ class _InventoryViewState extends State<InventoryView> {
                       : stockController.text.trim()),
                 );
 
-                await LocalDbService.instance.insertProduct(product.toMap());
-                FirebaseService().syncProduct(product);
+                // Save directly to Firestore
+                await _productsCollection!.doc(docId).set(product.toMap());
 
                 widget.onProductAdded(product);
 
@@ -155,7 +166,8 @@ class _InventoryViewState extends State<InventoryView> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
             onPressed: () async {
               if (nameController.text.isNotEmpty &&
-                  sellingPriceController.text.isNotEmpty) {
+                  sellingPriceController.text.isNotEmpty &&
+                  _productsCollection != null) {
                 final updatedProduct = Product(
                   id: product.id,
                   name: nameController.text.trim(),
@@ -169,16 +181,11 @@ class _InventoryViewState extends State<InventoryView> {
                   lowStockAlertThreshold: product.lowStockAlertThreshold,
                 );
 
-                await LocalDbService.instance.insertProduct(updatedProduct.toMap());
-                FirebaseService().syncProduct(updatedProduct);
+                // Update directly on Firestore
+                await _productsCollection!.doc(product.id).update(updatedProduct.toMap());
 
                 if (widget.onProductUpdated != null) {
                   widget.onProductUpdated!(updatedProduct);
-                } else {
-                  setState(() {
-                    int index = widget.products.indexWhere((p) => p.id == product.id);
-                    if (index != -1) widget.products[index] = updatedProduct;
-                  });
                 }
 
                 if (!mounted) return;
@@ -209,14 +216,15 @@ class _InventoryViewState extends State<InventoryView> {
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
-              await LocalDbService.instance.deleteProduct(product.id);
+              if (_productsCollection != null) {
+                // Delete directly from Firestore
+                await _productsCollection!.doc(product.id).delete();
+              }
+
               if (widget.onProductDeleted != null) {
                 widget.onProductDeleted!(product.id);
-              } else {
-                setState(() {
-                  widget.products.removeWhere((p) => p.id == product.id);
-                });
               }
+
               if (!mounted) return;
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
@@ -232,61 +240,82 @@ class _InventoryViewState extends State<InventoryView> {
 
   @override
   Widget build(BuildContext context) {
+    if (_user == null) {
+      return const Scaffold(
+        body: Center(child: Text('User not authenticated.')),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Inventory & Stock'),
         backgroundColor: Colors.indigo,
       ),
-      body: widget.products.isEmpty
-          ? const Center(child: Text('No inventory added yet.'))
-          : ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: widget.products.length,
-              itemBuilder: (context, index) {
-                final item = widget.products[index];
-                bool isLowStock = item.stockQuantity <= item.lowStockAlertThreshold;
+      body: StreamBuilder<QuerySnapshot>(
+        stream: _productsCollection?.snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-                return Card(
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: isLowStock ? Colors.red : Colors.indigo,
-                      child: Icon(
-                        isLowStock ? Icons.warning : Icons.inventory_2,
-                        color: Colors.white,
-                      ),
-                    ),
-                    title: Text(
-                      item.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: Text(
-                      'Stock: ${item.stockQuantity} units | Buy: KES ${item.buyingPrice.toStringAsFixed(0)}',
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          'KES ${item.sellingPrice.toStringAsFixed(0)}',
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.indigo,
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.edit, color: Colors.indigo),
-                          onPressed: () => _showEditProductDialog(item),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.red),
-                          onPressed: () => _confirmDeleteProduct(item),
-                        ),
-                      ],
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(child: Text('No inventory added yet.'));
+          }
+
+          final productsList = snapshot.data!.docs.map((doc) {
+            return Product.fromMap(doc.data() as Map<String, dynamic>);
+          }).toList();
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: productsList.length,
+            itemBuilder: (context, index) {
+              final item = productsList[index];
+              bool isLowStock = item.stockQuantity <= item.lowStockAlertThreshold;
+
+              return Card(
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: isLowStock ? Colors.red : Colors.indigo,
+                    child: Icon(
+                      isLowStock ? Icons.warning : Icons.inventory_2,
+                      color: Colors.white,
                     ),
                   ),
-                );
-              },
-            ),
+                  title: Text(
+                    item.name,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    'Stock: ${item.stockQuantity} units | Buy: KES ${item.buyingPrice.toStringAsFixed(0)}',
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'KES ${item.sellingPrice.toStringAsFixed(0)}',
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.indigo,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.edit, color: Colors.indigo),
+                        onPressed: () => _showEditProductDialog(item),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete, color: Colors.red),
+                        onPressed: () => _confirmDeleteProduct(item),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.indigo,
         onPressed: _showAddProductDialog,
