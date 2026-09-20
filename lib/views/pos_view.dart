@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:convert';
 import '../models/product.dart';
 import '../models/sale_transaction.dart';
@@ -165,6 +167,8 @@ class _PosViewState extends State<PosView> {
   void _completeCheckout() async {
     if (_cart.isEmpty) return;
 
+    final user = FirebaseAuth.instance.currentUser;
+
     // Deduct stock locally & via database
     for (var cartItem in _cart) {
       int pIdx = widget.products.indexWhere((p) => p.id == cartItem.productId);
@@ -174,6 +178,15 @@ class _PosViewState extends State<PosView> {
           widget.products[pIdx].id,
           widget.products[pIdx].stockQuantity,
         );
+
+        if (user != null) {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid)
+              .collection('products')
+              .doc(widget.products[pIdx].id)
+              .update({'stockQuantity': widget.products[pIdx].stockQuantity});
+        }
       }
     }
 
@@ -247,6 +260,8 @@ class _PosViewState extends State<PosView> {
 
   @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('POS Sell Screen'),
@@ -254,35 +269,53 @@ class _PosViewState extends State<PosView> {
       ),
       body: Row(
         children: [
-          // Left: Product Catalog
+          // Left: Product Catalog from Firestore
           Expanded(
             flex: 3,
-            child: ListView.builder(
-              padding: const EdgeInsets.all(8),
-              itemCount: widget.products.length,
-              itemBuilder: (context, idx) {
-                final p = widget.products[idx];
-                return Card(
-                  child: ListTile(
-                    title: Text(
-                      p.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: Text('Stock: ${p.stockQuantity}'),
-                    trailing: ElevatedButton(
-                      onPressed: () => _addToCart(p),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.indigo,
-                      ),
-                      child: Text(
-                        '+ KES ${p.sellingPrice.toStringAsFixed(0)}',
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                    ),
+            child: user == null
+                ? ListView.builder(
+                    padding: const EdgeInsets.all(8),
+                    itemCount: widget.products.length,
+                    itemBuilder: (context, idx) {
+                      final p = widget.products[idx];
+                      return _buildProductTile(p);
+                    },
+                  )
+                : StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(user.uid)
+                        .collection('products')
+                        .snapshots(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+
+                      List<Product> products = widget.products;
+                      if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
+                        products = snapshot.data!.docs.map((doc) {
+                          return Product.fromMap(
+                              doc.data() as Map<String, dynamic>);
+                        }).toList();
+                      }
+
+                      if (products.isEmpty) {
+                        return const Center(
+                          child: Text('No stock items found.'),
+                        );
+                      }
+
+                      return ListView.builder(
+                        padding: const EdgeInsets.all(8),
+                        itemCount: products.length,
+                        itemBuilder: (context, idx) {
+                          final p = products[idx];
+                          return _buildProductTile(p);
+                        },
+                      );
+                    },
                   ),
-                );
-              },
-            ),
           ),
           // Right: Cart & Payment Details
           Expanded(
@@ -413,6 +446,28 @@ class _PosViewState extends State<PosView> {
             ),
           )
         ],
+      ),
+    );
+  }
+
+  Widget _buildProductTile(Product p) {
+    return Card(
+      child: ListTile(
+        title: Text(
+          p.name,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text('Stock: ${p.stockQuantity}'),
+        trailing: ElevatedButton(
+          onPressed: () => _addToCart(p),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.indigo,
+          ),
+          child: Text(
+            '+ KES ${p.sellingPrice.toStringAsFixed(0)}',
+            style: const TextStyle(color: Colors.white),
+          ),
+        ),
       ),
     );
   }
