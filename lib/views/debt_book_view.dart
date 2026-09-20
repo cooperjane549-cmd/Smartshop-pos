@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import '../models/sale_transaction.dart';
-import '../services/local_db_service.dart';
 
 class DebtBookView extends StatelessWidget {
   final List<SaleTransaction> sales;
@@ -13,9 +14,6 @@ class DebtBookView extends StatelessWidget {
     required this.sales,
     required this.onDebtCleared,
   }) : super(key: key);
-
-  List<SaleTransaction> get creditSales =>
-      sales.where((s) => s.paymentMethod == 'CREDIT' && !s.isPaid).toList();
 
   String _formatPhoneNumberForWhatsApp(String rawPhone) {
     String cleaned = rawPhone.replaceAll(RegExp(r'\D'), '');
@@ -57,149 +55,188 @@ class DebtBookView extends StatelessWidget {
     }
   }
 
+  Future<void> _clearDebtInFirestore(String saleId) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('sales')
+          .doc(saleId)
+          .update({'isPaid': true});
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
     final now = DateTime.now();
+
+    if (user == null) {
+      return const Scaffold(
+        body: Center(child: Text('User not authenticated.')),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Debtors Ledger (Mkopo)'),
         backgroundColor: Colors.indigo,
       ),
-      body: creditSales.isEmpty
-          ? const Center(child: Text('No outstanding customer credit.'))
-          : ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: creditSales.length,
-              itemBuilder: (context, idx) {
-                final sale = creditSales[idx];
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('sales')
+            .where('paymentMethod', isEqualTo: 'CREDIT')
+            .where('isPaid', isEqualTo: false)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-                final bool isOverdue = sale.dueDate != null &&
-                    now.isAfter(
-                      DateTime(sale.dueDate!.year, sale.dueDate!.month, sale.dueDate!.day, 23, 59, 59),
-                    );
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(child: Text('No outstanding customer credit.'));
+          }
 
-                final dueDateText = sale.dueDate != null
-                    ? DateFormat('dd MMM yyyy').format(sale.dueDate!)
-                    : 'No Due Date Set';
+          final creditSales = snapshot.data!.docs.map((doc) {
+            return SaleTransaction.fromMap(doc.data() as Map<String, dynamic>);
+          }).toList();
 
-                return Card(
-                  elevation: 2,
-                  margin: const EdgeInsets.symmetric(vertical: 6),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    side: BorderSide(
-                      color: isOverdue ? Colors.red : Colors.transparent,
-                      width: isOverdue ? 1.5 : 0.0,
-                    ),
+          return ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: creditSales.length,
+            itemBuilder: (context, idx) {
+              final sale = creditSales[idx];
+
+              final bool isOverdue = sale.dueDate != null &&
+                  now.isAfter(
+                    DateTime(sale.dueDate!.year, sale.dueDate!.month, sale.dueDate!.day, 23, 59, 59),
+                  );
+
+              final dueDateText = sale.dueDate != null
+                  ? DateFormat('dd MMM yyyy').format(sale.dueDate!)
+                  : 'No Due Date Set';
+
+              return Card(
+                elevation: 2,
+                margin: const EdgeInsets.symmetric(vertical: 6),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(
+                    color: isOverdue ? Colors.red : Colors.transparent,
+                    width: isOverdue ? 1.5 : 0.0,
                   ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            CircleAvatar(
-                              backgroundColor: isOverdue ? Colors.red : Colors.indigo,
-                              child: const Icon(Icons.person, color: Colors.white),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    sale.customerName.isEmpty
-                                        ? 'Unnamed Customer'
-                                        : sale.customerName,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    'Phone: ${sale.customerPhone}',
-                                    style: TextStyle(
-                                      color: Colors.grey.shade700,
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            backgroundColor: isOverdue ? Colors.red : Colors.indigo,
+                            child: const Icon(Icons.person, color: Colors.white),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'KES ${sale.totalAmount.toStringAsFixed(0)}',
+                                  sale.customerName.isEmpty
+                                      ? 'Unnamed Customer'
+                                      : sale.customerName,
                                   style: const TextStyle(
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.red,
                                     fontSize: 16,
                                   ),
                                 ),
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.message, color: Colors.green),
-                                      onPressed: () => _sendWhatsAppReminder(context, sale),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.check_circle, color: Colors.blue),
-                                      onPressed: () async {
-                                        await LocalDbService.instance
-                                            .markSalePaid(sale.id, 'MANUAL_CLEAR');
-                                        onDebtCleared(sale.id, 'MANUAL_CLEAR');
-                                      },
-                                    ),
-                                  ],
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Phone: ${sale.customerPhone}',
+                                  style: TextStyle(
+                                    color: Colors.grey.shade700,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ],
                             ),
-                          ],
-                        ),
-                        const Divider(height: 12),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Due Date: $dueDateText',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: isOverdue ? Colors.red : Colors.grey.shade800,
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(
+                                'KES ${sale.totalAmount.toStringAsFixed(0)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.red,
+                                  fontSize: 16,
+                                ),
+                              ),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.message, color: Colors.green),
+                                    onPressed: () => _sendWhatsAppReminder(context, sale),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.check_circle, color: Colors.blue),
+                                    onPressed: () async {
+                                      await _clearDebtInFirestore(sale.id);
+                                      onDebtCleared(sale.id, 'MANUAL_CLEAR');
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Due Date: $dueDateText',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: isOverdue ? Colors.red : Colors.grey.shade800,
+                            ),
+                          ),
+                          if (isOverdue)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.red,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'LATE / DEFAULT',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
-                            if (isOverdue)
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.red,
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: const Text(
-                                  'LATE / DEFAULT',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
+                    ],
                   ),
-                );
-              },
-            ),
+                ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
