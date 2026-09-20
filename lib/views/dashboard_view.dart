@@ -32,9 +32,32 @@ class _DashboardViewState extends State<DashboardView> {
       .where((s) => s.paymentMethod == 'CREDIT' && !s.isPaid)
       .fold(0, (sum, s) => sum + s.totalAmount);
 
+  // Initialize automatic 10-day free trial for first-time users
+  Future<void> _ensureTrialInitialized(String uid) async {
+    final docRef = _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('subscription')
+        .doc('status');
+
+    final doc = await docRef.get();
+    if (!doc.exists) {
+      final trialExpiry = DateTime.now().add(const Duration(days: 10));
+      await docRef.set({
+        'isSubscribed': false,
+        'expiryDate': Timestamp.fromDate(trialExpiry),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final User? user = _authService.currentUser;
+
+    if (user != null) {
+      _ensureTrialInitialized(user.uid);
+    }
 
     return StreamBuilder<DocumentSnapshot>(
       stream: user != null
@@ -60,8 +83,10 @@ class _DashboardViewState extends State<DashboardView> {
         }
 
         final now = DateTime.now();
-        final bool isExpired = !isProUser && (expiryDate != null && now.isAfter(expiryDate));
         
+        // Lock screen activates if NOT a paying pro user AND expiry date has passed
+        final bool isExpired = !isProUser && (expiryDate != null && now.isAfter(expiryDate));
+
         int daysRemaining = 0;
         if (expiryDate != null) {
           daysRemaining = expiryDate.difference(now).inDays;
@@ -85,7 +110,7 @@ class _DashboardViewState extends State<DashboardView> {
           ),
           body: Stack(
             children: [
-              // Main Dashboard Interface
+              // Main Dashboard Content
               SingleChildScrollView(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -104,11 +129,12 @@ class _DashboardViewState extends State<DashboardView> {
                             CircleAvatar(
                               radius: 28,
                               backgroundColor: Colors.indigo.shade100,
-                              backgroundImage:
-                                  (user?.photoURL != null && user!.photoURL!.isNotEmpty)
-                                      ? NetworkImage(user.photoURL!)
-                                      : null,
-                              child: (user?.photoURL == null || user!.photoURL!.isEmpty)
+                              backgroundImage: (user?.photoURL != null &&
+                                      user!.photoURL!.isNotEmpty)
+                                  ? NetworkImage(user.photoURL!)
+                                  : null,
+                              child: (user?.photoURL == null ||
+                                      user!.photoURL!.isEmpty)
                                   ? Text(
                                       (user?.displayName ?? 'U')
                                           .substring(0, 1)
@@ -154,16 +180,18 @@ class _DashboardViewState extends State<DashboardView> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Subscription Status Card
+                    // Subscription Banner Card
                     Card(
                       elevation: 2,
                       color: isProUser
                           ? Colors.indigo.shade900
-                          : Colors.indigo.shade50,
+                          : Colors.amber.shade50,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                         side: BorderSide(
-                          color: isProUser ? Colors.indigo : Colors.indigo.shade200,
+                          color: isProUser
+                              ? Colors.indigo
+                              : Colors.amber.shade400,
                         ),
                       ),
                       child: Padding(
@@ -173,9 +201,11 @@ class _DashboardViewState extends State<DashboardView> {
                             Icon(
                               isProUser
                                   ? Icons.verified_rounded
-                                  : Icons.star_rounded,
+                                  : Icons.timer_outlined,
                               size: 36,
-                              color: isProUser ? Colors.amber : Colors.indigo,
+                              color: isProUser
+                                  ? Colors.amber
+                                  : Colors.amber.shade900,
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -183,27 +213,29 @@ class _DashboardViewState extends State<DashboardView> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    isProUser ? 'PRO PLAN ACTIVE' : 'FREE / TRIAL PLAN',
+                                    isProUser
+                                        ? 'PRO PLAN ACTIVE'
+                                        : '10-DAY FREE TRIAL',
                                     style: TextStyle(
-                                      fontSize: 16,
+                                      fontSize: 15,
                                       fontWeight: FontWeight.bold,
                                       color: isProUser
                                           ? Colors.white
-                                          : Colors.indigo.shade900,
+                                          : Colors.amber.shade900,
                                     ),
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
                                     expiryDate == null
-                                        ? 'No active subscription'
+                                        ? 'Setting up trial...'
                                         : isProUser
                                             ? 'Renews in $daysRemaining days'
-                                            : '$daysRemaining days remaining',
+                                            : '$daysRemaining days left on trial',
                                     style: TextStyle(
                                       fontSize: 13,
                                       color: isProUser
                                           ? Colors.white70
-                                          : Colors.indigo.shade700,
+                                          : Colors.amber.shade900,
                                     ),
                                   ),
                                 ],
@@ -226,10 +258,11 @@ class _DashboardViewState extends State<DashboardView> {
                     ),
                     const SizedBox(height: 20),
 
-                    // Daily Revenue Overview
+                    // Revenue Overview
                     const Text(
                       'Daily Revenue Overview',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -262,7 +295,8 @@ class _DashboardViewState extends State<DashboardView> {
                     // Recent Sales List
                     const Text(
                       'Recent Sales',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 10),
                     widget.sales.isEmpty
@@ -275,11 +309,13 @@ class _DashboardViewState extends State<DashboardView> {
                               final sale =
                                   widget.sales[widget.sales.length - 1 - idx];
                               return Card(
-                                margin: const EdgeInsets.symmetric(vertical: 6),
+                                margin:
+                                    const EdgeInsets.symmetric(vertical: 6),
                                 child: Padding(
                                   padding: const EdgeInsets.all(12),
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Row(
                                         mainAxisAlignment:
@@ -341,11 +377,13 @@ class _DashboardViewState extends State<DashboardView> {
                                             children: [
                                               Text(
                                                 '• ${item.productName} x${item.quantity}',
-                                                style: const TextStyle(fontSize: 13),
+                                                style: const TextStyle(
+                                                    fontSize: 13),
                                               ),
                                               Text(
                                                 'KES ${(item.unitPrice * item.quantity).toStringAsFixed(0)}',
-                                                style: const TextStyle(fontSize: 13),
+                                                style: const TextStyle(
+                                                    fontSize: 13),
                                               ),
                                             ],
                                           ),
@@ -361,10 +399,10 @@ class _DashboardViewState extends State<DashboardView> {
                 ),
               ),
 
-              // Blocking Overlay for Expiry Screen
+              // Full Screen Overlay after 10-Day Free Trial Expires
               if (isExpired)
                 Container(
-                  color: Colors.black87,
+                  color: Colors.indigo.shade900,
                   width: double.infinity,
                   height: double.infinity,
                   padding: const EdgeInsets.all(24.0),
@@ -373,39 +411,40 @@ class _DashboardViewState extends State<DashboardView> {
                     children: [
                       const Icon(
                         Icons.lock_clock_rounded,
-                        size: 80,
+                        size: 90,
                         color: Colors.amber,
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 20),
                       const Text(
-                        'Subscription Expired',
+                        '10-Day Free Trial Expired',
                         style: TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                         ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
                       const Text(
-                        'Your subscription period has ended. Submit your M-Pesa payment confirmation to renew and unlock SmartShop POS.',
+                        'Your free trial period has ended. To continue using SmartShop POS, please subscribe to one of our plans using Buy Goods Till 3043489.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 14, color: Colors.white70),
+                        style: TextStyle(fontSize: 14, color: Colors.white70, height: 1.4),
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 30),
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.amber.shade700,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 32, vertical: 14),
+                              horizontal: 36, vertical: 16),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: BorderRadius.circular(10),
                           ),
                         ),
                         onPressed: () => UpgradeDialog.show(context),
                         child: const Text(
-                          'Renew / Upgrade Now',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          'Upgrade Now (From KES 100)',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold),
                         ),
                       ),
                     ],
