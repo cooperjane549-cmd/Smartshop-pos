@@ -63,7 +63,9 @@ class DebtBookView extends StatelessWidget {
           .doc(user.uid)
           .collection('sales')
           .doc(saleId)
-          .update({'isPaid': true});
+          .update({
+        'isPaid': 1,
+      });
     }
   }
 
@@ -89,7 +91,6 @@ class DebtBookView extends StatelessWidget {
             .doc(user.uid)
             .collection('sales')
             .where('paymentMethod', isEqualTo: 'CREDIT')
-            .where('isPaid', isEqualTo: false)
             .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -100,9 +101,14 @@ class DebtBookView extends StatelessWidget {
             return const Center(child: Text('No outstanding customer credit.'));
           }
 
-          final creditSales = snapshot.data!.docs.map((doc) {
-            return SaleTransaction.fromMap(doc.data() as Map<String, dynamic>);
-          }).toList();
+          final creditSales = snapshot.data!.docs
+              .map((doc) => SaleTransaction.fromMap(doc.data() as Map<String, dynamic>))
+              .where((sale) => !sale.isPaid)
+              .toList();
+
+          if (creditSales.isEmpty) {
+            return const Center(child: Text('No outstanding customer credit.'));
+          }
 
           return ListView.builder(
             padding: const EdgeInsets.all(12),
