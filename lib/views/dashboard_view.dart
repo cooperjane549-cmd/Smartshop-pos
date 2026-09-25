@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/sale_transaction.dart';
 import '../services/auth_service.dart';
+import '../services/local_db_service.dart';
 import 'upgrade_dialog.dart';
 
 class DashboardView extends StatefulWidget {
@@ -18,17 +20,25 @@ class _DashboardViewState extends State<DashboardView> {
   final AuthService _authService = AuthService();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  double get cashCollected => widget.sales
+  // Filter sales to show only records from the last 60 days (Option C Active View)
+  List<SaleTransaction> get _activeSales {
+    final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
+    return widget.sales
+        .where((s) => s.createdAt.isAfter(cutoffDate))
+        .toList();
+  }
+
+  double get cashCollected => _activeSales
       .where((s) => s.paymentMethod == 'CASH')
       .fold(0, (sum, s) => sum + s.totalAmount);
 
-  double get mpesaCollected => widget.sales
+  double get mpesaCollected => _activeSales
       .where((s) =>
           s.paymentMethod == 'MPESA' ||
           (s.paymentMethod == 'CREDIT' && s.isPaid))
       .fold(0, (sum, s) => sum + s.totalAmount);
 
-  double get openCredit => widget.sales
+  double get openCredit => _activeSales
       .where((s) => s.paymentMethod == 'CREDIT' && !s.isPaid)
       .fold(0, (sum, s) => sum + s.totalAmount);
 
@@ -49,6 +59,62 @@ class _DashboardViewState extends State<DashboardView> {
         'createdAt': FieldValue.serverTimestamp(),
       });
     }
+  }
+
+  // Option C: Manual Purge Action Dialog
+  void _showClearHistoryDialog() {
+    final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
+    final olderSales = widget.sales
+        .where((s) => s.createdAt.isBefore(cutoffDate))
+        .toList();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Manage Sales History'),
+        content: Text(
+          olderSales.isEmpty
+              ? 'No sales records older than 60 days were found in memory.'
+              : 'Found ${olderSales.length} sale(s) older than 60 days. Would you like to clear them to keep your local database light?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          if (olderSales.isNotEmpty)
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () async {
+                final user = FirebaseAuth.instance.currentUser;
+                for (var sale in olderSales) {
+                  // Clear locally
+                  await LocalDbService.instance.deleteSale(sale.id);
+                  // Remove from Firestore
+                  if (user != null) {
+                    await _firestore
+                        .collection('users')
+                        .doc(user.uid)
+                        .collection('sales')
+                        .doc(sale.id)
+                        .delete();
+                  }
+                  widget.sales.removeWhere((s) => s.id == sale.id);
+                }
+                setState(() {});
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Sales older than 60 days successfully cleared.'),
+                  ),
+                );
+              },
+              child: const Text('Clear Old Data',
+                  style: TextStyle(color: Colors.white)),
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -92,6 +158,8 @@ class _DashboardViewState extends State<DashboardView> {
           daysRemaining = expiryDate.difference(now).inDays;
           if (daysRemaining < 0) daysRemaining = 0;
         }
+
+        final activeList = _activeSales;
 
         return Scaffold(
           appBar: AppBar(
@@ -292,22 +360,33 @@ class _DashboardViewState extends State<DashboardView> {
                     ),
                     const SizedBox(height: 20),
 
-                    // Recent Sales List
-                    const Text(
-                      'Recent Sales',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    // Recent Sales Header & Option C Purge Trigger
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Recent Sales (60 Days)',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        TextButton.icon(
+                          onPressed: _showClearHistoryDialog,
+                          icon: const Icon(Icons.cleaning_services, size: 16),
+                          label: const Text('Manage History',
+                              style: TextStyle(fontSize: 12)),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 10),
-                    widget.sales.isEmpty
-                        ? const Text('No transactions completed today.')
+                    activeList.isEmpty
+                        ? const Text('No transactions in the last 60 days.')
                         : ListView.builder(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
-                            itemCount: widget.sales.length,
+                            itemCount: activeList.length,
                             itemBuilder: (context, idx) {
                               final sale =
-                                  widget.sales[widget.sales.length - 1 - idx];
+                                  activeList[activeList.length - 1 - idx];
                               return Card(
                                 margin:
                                     const EdgeInsets.symmetric(vertical: 6),
