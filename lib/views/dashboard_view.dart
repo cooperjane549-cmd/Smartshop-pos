@@ -61,6 +61,55 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
+  // Delete a single sale transaction completely
+  Future<void> _deleteSaleTransaction(SaleTransaction sale) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Sale'),
+        content: Text('Are you sure you want to delete Sale ${sale.id}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      final user = FirebaseAuth.instance.currentUser;
+      
+      // Clear locally
+      await LocalDbService.instance.deleteSale(sale.id);
+      
+      // Remove from Firestore
+      if (user != null) {
+        await _firestore
+            .collection('users')
+            .doc(user.uid)
+            .collection('sales')
+            .doc(sale.id)
+            .delete();
+      }
+
+      setState(() {
+        widget.sales.removeWhere((s) => s.id == sale.id);
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sale ${sale.id} deleted.')),
+        );
+      }
+    }
+  }
+
   // Option C: Manual Purge Action Dialog
   void _showClearHistoryDialog() {
     final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
@@ -407,15 +456,32 @@ class _DashboardViewState extends State<DashboardView> {
                                               fontSize: 14,
                                             ),
                                           ),
-                                          Text(
-                                            'KES ${sale.totalAmount.toStringAsFixed(0)}',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 16,
-                                              color: sale.isPaid
-                                                  ? Colors.green
-                                                  : Colors.red,
-                                            ),
+                                          Row(
+                                            children: [
+                                              Text(
+                                                'KES ${sale.totalAmount.toStringAsFixed(0)}',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                  color: sale.isPaid
+                                                      ? Colors.green
+                                                      : Colors.red,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              IconButton(
+                                                icon: const Icon(
+                                                  Icons.delete_outline,
+                                                  color: Colors.red,
+                                                  size: 20,
+                                                ),
+                                                padding: EdgeInsets.zero,
+                                                constraints: const BoxConstraints(),
+                                                tooltip: 'Delete Sale',
+                                                onPressed: () =>
+                                                    _deleteSaleTransaction(sale),
+                                              ),
+                                            ],
                                           ),
                                         ],
                                       ),
