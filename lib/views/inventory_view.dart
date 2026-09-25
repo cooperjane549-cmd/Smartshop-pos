@@ -29,6 +29,9 @@ class _InventoryViewState extends State<InventoryView> {
   final buyingPriceController = TextEditingController();
   final sellingPriceController = TextEditingController();
   final stockController = TextEditingController();
+  final searchController = TextEditingController();
+
+  String _searchQuery = '';
 
   @override
   void dispose() {
@@ -36,6 +39,7 @@ class _InventoryViewState extends State<InventoryView> {
     buyingPriceController.dispose();
     sellingPriceController.dispose();
     stockController.dispose();
+    searchController.dispose();
     super.dispose();
   }
 
@@ -251,70 +255,113 @@ class _InventoryViewState extends State<InventoryView> {
         title: const Text('Inventory & Stock'),
         backgroundColor: Colors.indigo,
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: _productsCollection?.snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: TextField(
+              controller: searchController,
+              decoration: InputDecoration(
+                hintText: 'Search product by name...',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          setState(() {
+                            searchController.clear();
+                            _searchQuery = '';
+                          });
+                        },
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+              ),
+              onChanged: (val) {
+                setState(() {
+                  _searchQuery = val.trim().toLowerCase();
+                });
+              },
+            ),
+          ),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: _productsCollection?.snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
 
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return const Center(child: Text('No inventory added yet.'));
-          }
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return const Center(child: Text('No inventory added yet.'));
+                }
 
-          final productsList = snapshot.data!.docs.map((doc) {
-            return Product.fromMap(doc.data() as Map<String, dynamic>);
-          }).toList();
+                final productsList = snapshot.data!.docs.map((doc) {
+                  return Product.fromMap(doc.data() as Map<String, dynamic>);
+                }).where((item) {
+                  if (_searchQuery.isEmpty) return true;
+                  return item.name.toLowerCase().contains(_searchQuery);
+                }).toList();
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: productsList.length,
-            itemBuilder: (context, index) {
-              final item = productsList[index];
-              bool isLowStock = item.stockQuantity <= item.lowStockAlertThreshold;
+                if (productsList.isEmpty) {
+                  return const Center(child: Text('No items match your search.'));
+                }
 
-              return Card(
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: isLowStock ? Colors.red : Colors.indigo,
-                    child: Icon(
-                      isLowStock ? Icons.warning : Icons.inventory_2,
-                      color: Colors.white,
-                    ),
-                  ),
-                  title: Text(
-                    item.name,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: Text(
-                    'Stock: ${item.stockQuantity} units | Buy: KES ${item.buyingPrice.toStringAsFixed(0)}',
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'KES ${item.sellingPrice.toStringAsFixed(0)}',
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.indigo,
+                return ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  itemCount: productsList.length,
+                  itemBuilder: (context, index) {
+                    final item = productsList[index];
+                    bool isLowStock = item.stockQuantity <= item.lowStockAlertThreshold;
+
+                    return Card(
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: isLowStock ? Colors.red : Colors.indigo,
+                          child: Icon(
+                            isLowStock ? Icons.warning : Icons.inventory_2,
+                            color: Colors.white,
+                          ),
+                        ),
+                        title: Text(
+                          item.name,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Text(
+                          'Stock: ${item.stockQuantity} units | Buy: KES ${item.buyingPrice.toStringAsFixed(0)}',
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'KES ${item.sellingPrice.toStringAsFixed(0)}',
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.indigo,
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.edit, color: Colors.indigo),
+                              onPressed: () => _showEditProductDialog(item),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              onPressed: () => _confirmDeleteProduct(item),
+                            ),
+                          ],
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.edit, color: Colors.indigo),
-                        onPressed: () => _showEditProductDialog(item),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete, color: Colors.red),
-                        onPressed: () => _confirmDeleteProduct(item),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          );
-        },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.indigo,
@@ -324,3 +371,4 @@ class _InventoryViewState extends State<InventoryView> {
     );
   }
 }
+
