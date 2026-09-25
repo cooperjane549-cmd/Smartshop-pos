@@ -52,6 +52,8 @@ class LocalDbService {
     ''');
   }
 
+  // --- PRODUCT OPERATIONS ---
+
   Future<void> insertProduct(Map<String, dynamic> productMap) async {
     final db = await instance.database;
     await db.insert('products', productMap,
@@ -82,6 +84,8 @@ class LocalDbService {
     );
   }
 
+  // --- SALES OPERATIONS ---
+
   Future<void> insertSale(Map<String, dynamic> saleMap) async {
     final db = await instance.database;
     await db.insert('sales', saleMap,
@@ -98,6 +102,15 @@ class LocalDbService {
     await db.update(
       'sales',
       {'isPaid': 1, 'mpesaCode': mpesaCode},
+      where: 'id = ?',
+      whereArgs: [saleId],
+    );
+  }
+
+  Future<void> deleteSale(String saleId) async {
+    final db = await instance.database;
+    await db.delete(
+      'sales',
       where: 'id = ?',
       whereArgs: [saleId],
     );
