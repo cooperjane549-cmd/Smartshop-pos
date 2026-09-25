@@ -28,12 +28,14 @@ class PosView extends StatefulWidget {
 class _PosViewState extends State<PosView> {
   final List<CartItem> _cart = [];
   String _paymentMethod = 'CASH';
+  final _shopNameController = TextEditingController(text: 'SmartShop');
   final _customerNameController = TextEditingController();
   final _customerPhoneController = TextEditingController();
   DateTime? _selectedDueDate;
 
   @override
   void dispose() {
+    _shopNameController.dispose();
     _customerNameController.dispose();
     _customerPhoneController.dispose();
     super.dispose();
@@ -69,10 +71,13 @@ class _PosViewState extends State<PosView> {
   double get cartTotal =>
       _cart.fold(0, (sum, item) => sum + (item.unitPrice * item.quantity));
 
-  void _showCreditCustomerDialog() {
-    _customerNameController.clear();
-    _customerPhoneController.clear();
-    _selectedDueDate = null;
+  void _showCheckoutDialog() {
+    if (_cart.isEmpty) return;
+
+    final isCredit = _paymentMethod == 'CREDIT';
+    final now = DateTime.now();
+    final formattedDate =
+        "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
 
     showDialog(
       context: context,
@@ -81,80 +86,143 @@ class _PosViewState extends State<PosView> {
         return StatefulBuilder(
           builder: (context, setModalState) {
             return AlertDialog(
-              title: const Text('Credit Sale Details (Mkopo)'),
+              title: Text(
+                isCredit
+                    ? 'Credit Sale Details (Mkopo)'
+                    : ' Sale Details ($_paymentMethod)',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     TextField(
-                      controller: _customerNameController,
+                      controller: _shopNameController,
                       decoration: const InputDecoration(
-                        labelText: 'Customer Name *',
+                        labelText: 'Shop Name *',
                         border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _customerNameController,
+                      decoration: InputDecoration(
+                        labelText: isCredit
+                            ? 'Customer Name *'
+                            : 'Customer Name (Optional)',
+                        border: const OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 10),
                     TextField(
                       controller: _customerPhoneController,
                       keyboardType: TextInputType.phone,
-                      decoration: const InputDecoration(
-                        labelText: 'Customer Phone *',
-                        border: OutlineInputBorder(),
+                      decoration: InputDecoration(
+                        labelText: isCredit
+                            ? 'Customer Phone *'
+                            : 'Customer Phone (Optional)',
+                        border: const OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 10),
-                    ListTile(
-                      shape: RoundedRectangleBorder(
-                        side: const BorderSide(color: Colors.grey),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 12),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey),
                         borderRadius: BorderRadius.circular(4),
                       ),
-                      title: Text(
-                        _selectedDueDate == null
-                            ? 'Select Payment Due Date'
-                            : 'Due: ${_selectedDueDate.toString().split(' ')[0]}',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.calendar_today, color: Colors.indigo),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Purchase Date: $formattedDate',
+                            style: const TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                        ],
                       ),
-                      trailing: const Icon(Icons.calendar_today, color: Colors.indigo),
-                      onTap: () async {
-                        final picked = await showDatePicker(
-                          context: context,
-                          initialDate: DateTime.now().add(const Duration(days: 7)),
-                          firstDate: DateTime.now(),
-                          lastDate: DateTime.now().add(const Duration(days: 365)),
-                        );
-                        if (picked != null) {
-                          setModalState(() {
-                            _selectedDueDate = picked;
-                          });
-                        }
-                      },
                     ),
+                    if (isCredit) ...[
+                      const SizedBox(height: 10),
+                      ListTile(
+                        shape: RoundedRectangleBorder(
+                          side: const BorderSide(color: Colors.grey),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        title: Text(
+                          _selectedDueDate == null
+                              ? 'Select Payment Due Date *'
+                              : 'Due Date: ${_selectedDueDate.toString().split(' ')[0]}',
+                        ),
+                        trailing: const Icon(Icons.event, color: Colors.orange),
+                        onTap: () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate:
+                                DateTime.now().add(const Duration(days: 7)),
+                            firstDate: DateTime.now(),
+                            lastDate:
+                                DateTime.now().add(const Duration(days: 365)),
+                          );
+                          if (picked != null) {
+                            setModalState(() {
+                              _selectedDueDate = picked;
+                            });
+                          }
+                        },
+                      ),
+                    ],
                   ],
                 ),
               ),
               actions: [
                 TextButton(
                   onPressed: () {
-                    setState(() {
-                      _paymentMethod = 'CASH';
-                    });
                     Navigator.pop(ctx);
                   },
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.indigo,
+                  ),
                   onPressed: () {
-                    if (_customerNameController.text.trim().isEmpty ||
-                        _customerPhoneController.text.trim().isEmpty) {
+                    if (_shopNameController.text.trim().isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Please fill name and phone number.')),
+                        const SnackBar(
+                            content: Text('Please enter a shop name.')),
                       );
                       return;
                     }
+
+                    if (isCredit) {
+                      if (_customerNameController.text.trim().isEmpty ||
+                          _customerPhoneController.text.trim().isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text(
+                                  'Please fill customer name and phone for credit sale.')),
+                        );
+                        return;
+                      }
+                      if (_selectedDueDate == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text('Please select a payment due date.')),
+                        );
+                        return;
+                      }
+                    }
+
                     Navigator.pop(ctx);
                     _completeCheckout();
                   },
-                  child: const Text('Save Credit Sale', style: TextStyle(color: Colors.white)),
+                  child: Text(
+                    isCredit ? 'Save Credit Sale' : 'Complete Sale',
+                    style: const TextStyle(color: Colors.white),
+                  ),
                 ),
               ],
             );
@@ -190,14 +258,18 @@ class _PosViewState extends State<PosView> {
       }
     }
 
+    final phone = _customerPhoneController.text.trim();
+    final customerName = _customerNameController.text.trim();
+    final shopName = _shopNameController.text.trim();
+
     final sale = SaleTransaction(
       id: 'SALE_${DateTime.now().millisecondsSinceEpoch}',
       totalAmount: cartTotal,
       paymentMethod: _paymentMethod,
       isPaid: _paymentMethod != 'CREDIT',
       items: List.from(_cart),
-      customerName: _customerNameController.text.trim(),
-      customerPhone: _customerPhoneController.text.trim(),
+      customerName: customerName,
+      customerPhone: phone,
       dueDate: _selectedDueDate,
       createdAt: DateTime.now(),
     );
@@ -213,12 +285,13 @@ class _PosViewState extends State<PosView> {
     // Notify parent hub
     widget.onSaleCompleted(sale);
 
-    if (_paymentMethod == 'CREDIT' &&
-        _customerPhoneController.text.isNotEmpty) {
-      _sendCreditWhatsAppNudge(
-        _customerPhoneController.text.trim(),
-        _customerNameController.text.trim(),
-        cartTotal,
+    // Send WhatsApp receipt/nudge if phone number is present
+    if (phone.isNotEmpty) {
+      _sendWhatsAppReceipt(
+        phone: phone,
+        customerName: customerName,
+        shopName: shopName,
+        sale: sale,
       );
     }
 
@@ -240,8 +313,12 @@ class _PosViewState extends State<PosView> {
     });
   }
 
-  void _sendCreditWhatsAppNudge(
-      String phone, String name, double amount) async {
+  void _sendWhatsAppReceipt({
+    required String phone,
+    required String customerName,
+    required String shopName,
+    required SaleTransaction sale,
+  }) async {
     String cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
     if (cleanPhone.startsWith('0')) {
       cleanPhone = '254${cleanPhone.substring(1)}';
@@ -249,8 +326,44 @@ class _PosViewState extends State<PosView> {
       cleanPhone = cleanPhone.substring(1);
     }
 
-    final message =
-        "Hello $name, this confirms your credit purchase of KES ${amount.toStringAsFixed(0)} at SmartShop POS. Please clear via M-Pesa at your earliest convenience.";
+    final dateStr =
+        "${sale.createdAt.year}-${sale.createdAt.month.toString().padLeft(2, '0')}-${sale.createdAt.day.toString().padLeft(2, '0')}";
+
+    StringBuffer itemList = StringBuffer();
+    for (var item in sale.items) {
+      itemList.writeln(
+          "- ${item.productName} x${item.quantity} = KES ${(item.quantity * item.unitPrice).toStringAsFixed(0)}");
+    }
+
+    String message;
+    if (sale.paymentMethod == 'CREDIT') {
+      final dueDateStr = sale.dueDate != null
+          ? "${sale.dueDate!.year}-${sale.dueDate!.month.toString().padLeft(2, '0')}-${sale.dueDate!.day.toString().padLeft(2, '0')}"
+          : 'N/A';
+
+      message = "🧾 *CREDIT RECEIPT - $shopName*\n"
+          "------------------------------------\n"
+          "Customer: ${customerName.isEmpty ? 'Valued Customer' : customerName}\n"
+          "Date: $dateStr\n"
+          "Payment Due Date: $dueDateStr\n\n"
+          "*Items Bought:*\n"
+          "${itemList.toString()}\n"
+          "*Total Amount Due: KES ${sale.totalAmount.toStringAsFixed(0)}*\n"
+          "------------------------------------\n"
+          "Please clear your payment on or before $dueDateStr. Thank you for doing business with $shopName!";
+    } else {
+      message = "🧾 *RECEIPT - $shopName*\n"
+          "------------------------------------\n"
+          "Customer: ${customerName.isEmpty ? 'Valued Customer' : customerName}\n"
+          "Date: $dateStr\n"
+          "Payment Method: ${sale.paymentMethod}\n\n"
+          "*Items Bought:*\n"
+          "${itemList.toString()}\n"
+          "*Total Paid: KES ${sale.totalAmount.toStringAsFixed(0)}*\n"
+          "------------------------------------\n"
+          "Thank you for shopping at $shopName!";
+    }
+
     final uri = Uri.parse(
         "https://wa.me/$cleanPhone?text=${Uri.encodeComponent(message)}");
     if (await canLaunchUrl(uri)) {
@@ -288,7 +401,8 @@ class _PosViewState extends State<PosView> {
                         .collection('products')
                         .snapshots(),
                     builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
+                      if (snapshot.connectionState ==
+                          ConnectionState.waiting) {
                         return const Center(child: CircularProgressIndicator());
                       }
 
@@ -408,7 +522,7 @@ class _PosViewState extends State<PosView> {
                           onSelected: (s) {
                             setState(() => _paymentMethod = 'CREDIT');
                             if (_cart.isNotEmpty) {
-                              _showCreditCustomerDialog();
+                              _showCheckoutDialog();
                             }
                           },
                         ),
@@ -426,11 +540,7 @@ class _PosViewState extends State<PosView> {
                       onPressed: _cart.isEmpty
                           ? null
                           : () {
-                              if (_paymentMethod == 'CREDIT') {
-                                _showCreditCustomerDialog();
-                              } else {
-                                _completeCheckout();
-                              }
+                              _showCheckoutDialog();
                             },
                       child: const Text(
                         'Complete & Receipt',
