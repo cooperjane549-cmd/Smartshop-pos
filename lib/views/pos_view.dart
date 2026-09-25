@@ -31,6 +31,8 @@ class _PosViewState extends State<PosView> {
   final _shopNameController = TextEditingController(text: 'SmartShop');
   final _customerNameController = TextEditingController();
   final _customerPhoneController = TextEditingController();
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
   DateTime? _selectedDueDate;
 
   @override
@@ -38,6 +40,7 @@ class _PosViewState extends State<PosView> {
     _shopNameController.dispose();
     _customerNameController.dispose();
     _customerPhoneController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -382,54 +385,73 @@ class _PosViewState extends State<PosView> {
       ),
       body: Row(
         children: [
-          // Left: Product Catalog from Firestore
+          // Left: Search Bar & Product Catalog from Firestore
           Expanded(
             flex: 3,
-            child: user == null
-                ? ListView.builder(
-                    padding: const EdgeInsets.all(8),
-                    itemCount: widget.products.length,
-                    itemBuilder: (context, idx) {
-                      final p = widget.products[idx];
-                      return _buildProductTile(p);
-                    },
-                  )
-                : StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance
-                        .collection('users')
-                        .doc(user.uid)
-                        .collection('products')
-                        .snapshots(),
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState ==
-                          ConnectionState.waiting) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-
-                      List<Product> products = widget.products;
-                      if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-                        products = snapshot.data!.docs.map((doc) {
-                          return Product.fromMap(
-                              doc.data() as Map<String, dynamic>);
-                        }).toList();
-                      }
-
-                      if (products.isEmpty) {
-                        return const Center(
-                          child: Text('No stock items found.'),
-                        );
-                      }
-
-                      return ListView.builder(
-                        padding: const EdgeInsets.all(8),
-                        itemCount: products.length,
-                        itemBuilder: (context, idx) {
-                          final p = products[idx];
-                          return _buildProductTile(p);
-                        },
-                      );
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: 'Search items to sell...',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                setState(() {
+                                  _searchController.clear();
+                                  _searchQuery = '';
+                                });
+                              },
+                            )
+                          : null,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 12),
+                    ),
+                    onChanged: (val) {
+                      setState(() {
+                        _searchQuery = val.trim().toLowerCase();
+                      });
                     },
                   ),
+                ),
+                Expanded(
+                  child: user == null
+                      ? _buildProductList(widget.products)
+                      : StreamBuilder<QuerySnapshot>(
+                          stream: FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(user.uid)
+                              .collection('products')
+                              .snapshots(),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState ==
+                                ConnectionState.waiting) {
+                              return const Center(
+                                  child: CircularProgressIndicator());
+                            }
+
+                            List<Product> products = widget.products;
+                            if (snapshot.hasData &&
+                                snapshot.data!.docs.isNotEmpty) {
+                              products = snapshot.data!.docs.map((doc) {
+                                return Product.fromMap(
+                                    doc.data() as Map<String, dynamic>);
+                              }).toList();
+                            }
+
+                            return _buildProductList(products);
+                          },
+                        ),
+                ),
+              ],
+            ),
           ),
           // Right: Cart & Payment Details
           Expanded(
@@ -557,6 +579,28 @@ class _PosViewState extends State<PosView> {
           )
         ],
       ),
+    );
+  }
+
+  Widget _buildProductList(List<Product> products) {
+    final filteredProducts = products.where((item) {
+      if (_searchQuery.isEmpty) return true;
+      return item.name.toLowerCase().contains(_searchQuery);
+    }).toList();
+
+    if (filteredProducts.isEmpty) {
+      return const Center(
+        child: Text('No items match your search.'),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(8),
+      itemCount: filteredProducts.length,
+      itemBuilder: (context, idx) {
+        final p = filteredProducts[idx];
+        return _buildProductTile(p);
+      },
     );
   }
 
