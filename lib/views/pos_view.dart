@@ -51,8 +51,20 @@ class _PosViewState extends State<PosView> {
       );
       return;
     }
+
+    int idx = _cart.indexWhere((c) => c.productId == p.id);
+    int currentInCart = idx >= 0 ? _cart[idx].quantity : 0;
+
+    if (currentInCart >= p.stockQuantity) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Cannot add more. Available stock is ${p.stockQuantity}'),
+        ),
+      );
+      return;
+    }
+
     setState(() {
-      int idx = _cart.indexWhere((c) => c.productId == p.id);
       if (idx >= 0) {
         _cart[idx] = CartItem(
           productId: p.id,
@@ -92,7 +104,7 @@ class _PosViewState extends State<PosView> {
               title: Text(
                 isCredit
                     ? 'Credit Sale Details (Mkopo)'
-                    : ' Sale Details ($_paymentMethod)',
+                    : 'Sale Details ($_paymentMethod)',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               content: SingleChildScrollView(
@@ -240,23 +252,30 @@ class _PosViewState extends State<PosView> {
 
     final user = FirebaseAuth.instance.currentUser;
 
-    // Deduct stock locally & via database
+    // Deduct stock locally & via database for every item in cart
     for (var cartItem in _cart) {
       int pIdx = widget.products.indexWhere((p) => p.id == cartItem.productId);
       if (pIdx >= 0) {
-        widget.products[pIdx].stockQuantity -= cartItem.quantity;
+        final newQuantity = widget.products[pIdx].stockQuantity - cartItem.quantity;
+        final updatedStock = newQuantity < 0 ? 0 : newQuantity;
+
+        // Update local memory list
+        widget.products[pIdx].stockQuantity = updatedStock;
+
+        // Update local SQLite DB
         await LocalDbService.instance.updateStock(
           widget.products[pIdx].id,
-          widget.products[pIdx].stockQuantity,
+          updatedStock,
         );
 
+        // Update Firestore Cloud Database
         if (user != null) {
           await FirebaseFirestore.instance
               .collection('users')
               .doc(user.uid)
               .collection('products')
               .doc(widget.products[pIdx].id)
-              .update({'stockQuantity': widget.products[pIdx].stockQuantity});
+              .update({'stockQuantity': updatedStock});
         }
       }
     }
