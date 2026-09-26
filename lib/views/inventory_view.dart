@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/product.dart';
+import '../services/local_db_service.dart';
 
 class InventoryView extends StatefulWidget {
   final List<Product> products;
@@ -109,8 +110,13 @@ class _InventoryViewState extends State<InventoryView> {
                       : stockController.text.trim()),
                 );
 
-                // Save directly to Firestore
-                await _productsCollection!.doc(docId).set(product.toMap());
+                // Save to SQLite Local DB first
+                await LocalDbService.instance.insertProduct(product.toMap());
+
+                // Save directly to Firestore with matching explicit ID in document body
+                final productData = product.toMap();
+                productData['id'] = docId;
+                await _productsCollection!.doc(docId).set(productData);
 
                 widget.onProductAdded(product);
 
@@ -183,6 +189,12 @@ class _InventoryViewState extends State<InventoryView> {
                       ? '0'
                       : stockController.text.trim()),
                   lowStockAlertThreshold: product.lowStockAlertThreshold,
+                );
+
+                // Update Local SQLite DB
+                await LocalDbService.instance.updateStock(
+                  updatedProduct.id,
+                  updatedProduct.stockQuantity,
                 );
 
                 // Update directly on Firestore
@@ -300,7 +312,9 @@ class _InventoryViewState extends State<InventoryView> {
                 }
 
                 final productsList = snapshot.data!.docs.map((doc) {
-                  return Product.fromMap(doc.data() as Map<String, dynamic>);
+                  Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+                  data['id'] = doc.id; // Enforce matching document ID
+                  return Product.fromMap(data);
                 }).where((item) {
                   if (_searchQuery.isEmpty) return true;
                   return item.name.toLowerCase().contains(_searchQuery);
@@ -371,4 +385,3 @@ class _InventoryViewState extends State<InventoryView> {
     );
   }
 }
-
