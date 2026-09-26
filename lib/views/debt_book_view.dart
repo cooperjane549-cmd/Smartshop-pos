@@ -205,11 +205,21 @@ class _DebtBookViewState extends State<DebtBookView> {
                     final bool isFullyPaid = remainingBalance <= 0;
                     final double newBalance = remainingBalance < 0 ? 0 : remainingBalance;
 
-                    sale.totalAmount = newBalance;
-                    sale.isPaid = isFullyPaid;
+                    // Create updated SaleTransaction object without mutating final fields
+                    final updatedSale = SaleTransaction(
+                      id: sale.id,
+                      totalAmount: newBalance,
+                      paymentMethod: sale.paymentMethod,
+                      isPaid: isFullyPaid,
+                      items: sale.items,
+                      customerName: sale.customerName,
+                      customerPhone: sale.customerPhone,
+                      dueDate: sale.dueDate,
+                      createdAt: sale.createdAt,
+                    );
 
-                    Map<String, dynamic> updatedCreditSaleMap = sale.toMap();
-                    updatedCreditSaleMap['items'] = jsonEncode(sale.items.map((e) => e.toMap()).toList());
+                    Map<String, dynamic> updatedCreditSaleMap = updatedSale.toMap();
+                    updatedCreditSaleMap['items'] = jsonEncode(updatedSale.items.map((e) => e.toMap()).toList());
 
                     await LocalDbService.instance.insertSale(updatedCreditSaleMap);
                     if (user != null) {
