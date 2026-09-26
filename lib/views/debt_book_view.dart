@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import '../models/sale_transaction.dart';
+import '../services/local_db_service.dart';
 
 class DebtBookView extends StatefulWidget {
   final List<SaleTransaction> sales;
@@ -71,6 +73,16 @@ class _DebtBookViewState extends State<DebtBookView> {
 
   Future<void> _clearDebtInFirestore(String saleId) async {
     final user = FirebaseAuth.instance.currentUser;
+    
+    // Local SQLite Update
+    final localSaleMap = {
+      'id': saleId,
+      'isPaid': 1,
+      'totalAmount': 0.0,
+    };
+    await LocalDbService.instance.insertSale(localSaleMap);
+
+    // Firestore Update
     if (user != null) {
       await FirebaseFirestore.instance
           .collection('users')
@@ -79,79 +91,159 @@ class _DebtBookViewState extends State<DebtBookView> {
           .doc(saleId)
           .update({
         'isPaid': 1,
+        'totalAmount': 0.0,
       });
     }
   }
 
-  void _showEditCreditDialog(BuildContext context, SaleTransaction sale) {
-    final TextEditingController amountController =
-        TextEditingController(text: sale.totalAmount.toStringAsFixed(0));
+  void _showRepaymentDialog(BuildContext context, SaleTransaction sale) {
+    final TextEditingController amountController = TextEditingController();
+    String paymentMode = 'CASH';
 
     showDialog(
       context: context,
       builder: (ctx) {
-        return AlertDialog(
-          title: Text('Edit Debt (${sale.customerName})'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Current Balance: KES ${sale.totalAmount.toStringAsFixed(0)}',
-                style: const TextStyle(fontWeight: FontWeight.bold),
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('Record Payment (${sale.customerName})'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Outstanding Balance: KES ${sale.totalAmount.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.red,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: amountController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Amount Paid (KES)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('CASH'),
+                        selected: paymentMode == 'CASH',
+                        selectedColor: Colors.indigo.shade100,
+                        onSelected: (val) => setDialogState(() => paymentMode = 'CASH'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('M-PESA'),
+                        selected: paymentMode == 'MPESA',
+                        selectedColor: Colors.indigo.shade100,
+                        onSelected: (val) => setDialogState(() => paymentMode = 'MPESA'),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: amountController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'New Remaining Balance (KES)',
-                  border: OutlineInputBorder(),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
                 ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
-              onPressed: () async {
-                final double? newAmount = double.tryParse(amountController.text.trim());
-                if (newAmount == null || newAmount < 0) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Please enter a valid amount.')),
-                  );
-                  return;
-                }
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
+                  onPressed: () async {
+                    final double paidAmount = double.tryParse(amountController.text.trim()) ?? 0;
+                    if (paidAmount <= 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Please enter a valid amount paid.')),
+                      );
+                      return;
+                    }
 
-                final user = FirebaseAuth.instance.currentUser;
-                if (user != null) {
-                  if (newAmount == 0) {
-                    await _clearDebtInFirestore(sale.id);
-                    widget.onDebtCleared(sale.id, 'MANUAL_CLEAR');
-                  } else {
-                    await FirebaseFirestore.instance
-                        .collection('users')
-                        .doc(user.uid)
-                        .collection('sales')
-                        .doc(sale.id)
-                        .update({'totalAmount': newAmount});
-                  }
-                }
+                    final user = FirebaseAuth.instance.currentUser;
+                    final now = DateTime.now();
 
-                if (context.mounted) {
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Debt balance updated.')),
-                  );
-                }
-              },
-              child: const Text('Save', style: TextStyle(color: Colors.white)),
-            ),
-          ],
+                    // 1. Record payment cashflow transaction
+                    final String repaymentSaleId = 'REP_${now.millisecondsSinceEpoch}';
+                    final repaymentSale = SaleTransaction(
+                      id: repaymentSaleId,
+                      totalAmount: paidAmount,
+                      paymentMethod: paymentMode,
+                      isPaid: true,
+                      items: [
+                        CartItem(
+                          productId: 'DEBT_PAYMENT',
+                          productName: 'Debt Repayment (${sale.customerName})',
+                          quantity: 1,
+                          unitPrice: paidAmount,
+                        )
+                      ],
+                      customerName: sale.customerName,
+                      customerPhone: sale.customerPhone,
+                      createdAt: now,
+                    );
+
+                    Map<String, dynamic> repaymentMap = repaymentSale.toMap();
+                    repaymentMap['items'] = jsonEncode(repaymentSale.items.map((e) => e.toMap()).toList());
+
+                    // Save payment locally & cloud
+                    await LocalDbService.instance.insertSale(repaymentMap);
+                    if (user != null) {
+                      await FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(user.uid)
+                          .collection('sales')
+                          .doc(repaymentSaleId)
+                          .set(repaymentMap);
+                    }
+
+                    // 2. Adjust original credit balance
+                    final double remainingBalance = sale.totalAmount - paidAmount;
+                    final bool isFullyPaid = remainingBalance <= 0;
+                    final double newBalance = remainingBalance < 0 ? 0 : remainingBalance;
+
+                    sale.totalAmount = newBalance;
+                    sale.isPaid = isFullyPaid;
+
+                    Map<String, dynamic> updatedCreditSaleMap = sale.toMap();
+                    updatedCreditSaleMap['items'] = jsonEncode(sale.items.map((e) => e.toMap()).toList());
+
+                    await LocalDbService.instance.insertSale(updatedCreditSaleMap);
+                    if (user != null) {
+                      await FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(user.uid)
+                          .collection('sales')
+                          .doc(sale.id)
+                          .update({
+                        'totalAmount': newBalance,
+                        'isPaid': isFullyPaid ? 1 : 0,
+                      });
+                    }
+
+                    if (isFullyPaid) {
+                      widget.onDebtCleared(sale.id, paymentMode);
+                    }
+
+                    if (context.mounted) {
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Recorded payment of KES ${paidAmount.toStringAsFixed(0)} via $paymentMode',
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                  child: const Text('Save Payment', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -224,7 +316,7 @@ class _DebtBookViewState extends State<DebtBookView> {
 
                 final creditSales = snapshot.data!.docs
                     .map((doc) => SaleTransaction.fromMap(doc.data() as Map<String, dynamic>))
-                    .where((sale) => !sale.isPaid)
+                    .where((sale) => !sale.isPaid && sale.totalAmount > 0)
                     .where((sale) {
                       if (_searchQuery.isEmpty) return true;
                       final nameMatch = sale.customerName.toLowerCase().contains(_searchQuery);
@@ -313,15 +405,18 @@ class _DebtBookViewState extends State<DebtBookView> {
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         IconButton(
-                                          icon: const Icon(Icons.edit, color: Colors.orange),
-                                          onPressed: () => _showEditCreditDialog(context, sale),
+                                          icon: const Icon(Icons.payments, color: Colors.indigo),
+                                          tooltip: 'Record Payment',
+                                          onPressed: () => _showRepaymentDialog(context, sale),
                                         ),
                                         IconButton(
                                           icon: const Icon(Icons.message, color: Colors.green),
+                                          tooltip: 'WhatsApp Reminder',
                                           onPressed: () => _sendWhatsAppReminder(context, sale),
                                         ),
                                         IconButton(
                                           icon: const Icon(Icons.check_circle, color: Colors.blue),
+                                          tooltip: 'Clear Entire Debt',
                                           onPressed: () async {
                                             await _clearDebtInFirestore(sale.id);
                                             widget.onDebtCleared(sale.id, 'MANUAL_CLEAR');
