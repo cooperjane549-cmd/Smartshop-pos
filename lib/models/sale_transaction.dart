@@ -1,4 +1,4 @@
-import 'dart0000000:json';
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/product.dart';
@@ -109,18 +109,13 @@ class SaleTransaction {
 
     for (final cartItem in items) {
       final int productIdx = availableProducts.indexWhere((p) => p.id == cartItem.productId);
-      
+
       if (productIdx != -1) {
         final product = availableProducts[productIdx];
-        final int newStock = (product.stockQuantity - cartItem.quantity) < 0 
-            ? 0 
-            : product.stockQuantity - cartItem.quantity;
-
-        // Update local object memory
-        product.stockQuantity = newStock;
+        product.deductStock(cartItem.quantity);
 
         // Update local SQLite DB
-        await LocalDbService.instance.updateStock(product.id, newStock);
+        await LocalDbService.instance.updateStock(product.id, product.stockQuantity);
 
         // Update Cloud Firestore
         if (user != null) {
@@ -129,7 +124,7 @@ class SaleTransaction {
               .doc(user.uid)
               .collection('products')
               .doc(product.id)
-              .update({'stockQuantity': newStock});
+              .update({'stockQuantity': product.stockQuantity});
         }
       }
     }
