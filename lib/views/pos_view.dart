@@ -11,14 +11,22 @@ import 'receipt_view.dart';
 
 class PosView extends StatefulWidget {
   final List<Product> products;
+  final List<SaleTransaction> sales;
   final Function(SaleTransaction) onSaleCompleted;
   final VoidCallback? onCreditSelected;
+  // Called when a CREDIT checkout's phone number matches an existing unpaid
+  // debtor and the cashier confirms merging into it, instead of creating a
+  // brand-new separate debt entry.
+  final Function(String saleId, double addedAmount, List<CartItem> addedItems)?
+      onExistingDebtFound;
 
   const PosView({
     Key? key,
     required this.products,
+    required this.sales,
     required this.onSaleCompleted,
     this.onCreditSelected,
+    this.onExistingDebtFound,
   }) : super(key: key);
 
   @override
@@ -85,6 +93,123 @@ class _PosViewState extends State<PosView> {
 
   double get cartTotal =>
       _cart.fold(0, (sum, item) => sum + (item.unitPrice * item.quantity));
+
+  // Strips a phone number down to digits and normalizes the local "0..."
+  // prefix to "254..." so different formats of the same number still match.
+  String _normalizePhone(String raw) {
+    String cleaned = raw.replaceAll(RegExp(r'\D'), '');
+    if (cleaned.startsWith('0') && cleaned.length > 1) {
+      cleaned = '254${cleaned.substring(1)}';
+    }
+    return cleaned;
+  }
+
+  // Looks for an existing unpaid CREDIT sale with a matching phone number.
+  // If found, asks the cashier to confirm merging this purchase into it.
+  // Returns the existing SaleTransaction to merge into, or null to proceed
+  // as a brand new debtor.
+  Future<SaleTransaction?> _resolveDebtorMatch(String phone) async {
+    final normalizedInput = _normalizePhone(phone);
+    if (normalizedInput.isEmpty) return null;
+
+    SaleTransaction? existing;
+    for (var s in widget.sales) {
+      if (s.paymentMethod == 'CREDIT' && !s.isPaid && s.totalAmount > 0) {
+        if (_normalizePhone(s.customerPhone) == normalizedInput) {
+          existing = s;
+          break;
+        }
+      }
+    }
+
+    if (existing == null) return null;
+
+    final matchedSale = existing;
+    final newTotal = matchedSale.totalAmount + cartTotal;
+
+    if (!mounted) return null;
+
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Existing Debt Found'),
+        content: Text(
+          '${matchedSale.customerName.isEmpty ? "This customer" : matchedSale.customerName} '
+          'already owes KES ${matchedSale.totalAmount.toStringAsFixed(0)}.\n\n'
+          'Add this purchase of KES ${cartTotal.toStringAsFixed(0)} to their existing debt?\n'
+          'New total will be KES ${newTotal.toStringAsFixed(0)}.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, false),
+            child: const Text('No, New Debtor'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Yes, Add to Existing',
+                style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    return (confirmed == true) ? matchedSale : null;
+  }
+
+  // Deducts stock for every item in the cart, directly by product ID in
+  // Firestore (atomic increment), independent of whether widget.products
+  // happens to contain a matching entry.
+  Future<void> _deductStockForCartItems() async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    for (var cartItem in _cart) {
+      if (user != null) {
+        final productRef = FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('products')
+            .doc(cartItem.productId);
+
+        try {
+          await productRef.update({
+            'stockQuantity': FieldValue.increment(-cartItem.quantity),
+          });
+
+          final updatedDoc = await productRef.get();
+          final newQty = (updatedDoc.data()?['stockQuantity'] ?? 0) as int;
+          final safeQty = newQty < 0 ? 0 : newQty;
+
+          if (safeQty != newQty) {
+            await productRef.update({'stockQuantity': safeQty});
+          }
+
+          await LocalDbService.instance.updateStock(cartItem.productId, safeQty);
+
+          int pIdx = widget.products.indexWhere((p) => p.id == cartItem.productId);
+          if (pIdx >= 0) {
+            widget.products[pIdx].stockQuantity = safeQty;
+          }
+        } catch (e) {
+          debugPrint("Error deducting stock for ${cartItem.productId}: $e");
+        }
+      } else {
+        int pIdx = widget.products.indexWhere((p) => p.id == cartItem.productId);
+        if (pIdx >= 0) {
+          final newQuantity = widget.products[pIdx].stockQuantity - cartItem.quantity;
+          final updatedStock = newQuantity < 0 ? 0 : newQuantity;
+
+          widget.products[pIdx].stockQuantity = updatedStock;
+
+          await LocalDbService.instance.updateStock(
+            widget.products[pIdx].id,
+            updatedStock,
+          );
+        }
+      }
+    }
+  }
 
   void _showCheckoutDialog() {
     if (_cart.isEmpty) return;
@@ -203,7 +328,7 @@ class _PosViewState extends State<PosView> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.indigo,
                   ),
-                  onPressed: () {
+                  onPressed: () async {
                     if (_shopNameController.text.trim().isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
@@ -229,10 +354,24 @@ class _PosViewState extends State<PosView> {
                         );
                         return;
                       }
-                    }
 
-                    Navigator.pop(ctx);
-                    _completeCheckout();
+                      // Check if this phone number already has an outstanding
+                      // debt before deciding whether to merge or create new.
+                      final existingDebtor = await _resolveDebtorMatch(
+                          _customerPhoneController.text.trim());
+
+                      if (!mounted) return;
+                      Navigator.pop(ctx);
+
+                      if (existingDebtor != null) {
+                        _completeCreditMerge(existingDebtor);
+                      } else {
+                        _completeCheckout();
+                      }
+                    } else {
+                      Navigator.pop(ctx);
+                      _completeCheckout();
+                    }
                   },
                   child: Text(
                     isCredit ? 'Save Credit Sale' : 'Complete Sale',
@@ -247,65 +386,46 @@ class _PosViewState extends State<PosView> {
     );
   }
 
+  // Merges the current cart into an existing debtor's balance instead of
+  // creating a brand-new separate debt record. Stock still deducts
+  // immediately; the actual debt ledger update happens once the cashier
+  // confirms it in the pre-filled Add Debt dialog on the Debtors screen.
+  void _completeCreditMerge(SaleTransaction existingSale) async {
+    if (_cart.isEmpty) return;
+
+    await _deductStockForCartItems();
+
+    final addedItems = List<CartItem>.from(_cart);
+    final addedAmount = cartTotal;
+
+    widget.onExistingDebtFound?.call(existingSale.id, addedAmount, addedItems);
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Stock updated. Confirm adding KES ${addedAmount.toStringAsFixed(0)} '
+          'to ${existingSale.customerName}\'s balance on the Debtors screen.',
+        ),
+      ),
+    );
+
+    setState(() {
+      _cart.clear();
+      _customerNameController.clear();
+      _customerPhoneController.clear();
+      _selectedDueDate = null;
+      _paymentMethod = 'CASH';
+    });
+  }
+
   void _completeCheckout() async {
     if (_cart.isEmpty) return;
 
-    final user = FirebaseAuth.instance.currentUser;
-
     // Deduct stock directly in Firestore by product ID (atomic increment),
     // independent of whatever is currently in widget.products.
-    for (var cartItem in _cart) {
-      if (user != null) {
-        final productRef = FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .collection('products')
-            .doc(cartItem.productId);
-
-        try {
-          await productRef.update({
-            'stockQuantity': FieldValue.increment(-cartItem.quantity),
-          });
-
-          final updatedDoc = await productRef.get();
-          final newQty = (updatedDoc.data()?['stockQuantity'] ?? 0) as int;
-          final safeQty = newQty < 0 ? 0 : newQty;
-
-          if (safeQty != newQty) {
-            // Clamp negative stock back to 0 in Firestore if it ever occurs
-            await productRef.update({'stockQuantity': safeQty});
-          }
-
-          // Keep local SQLite DB in sync
-          await LocalDbService.instance.updateStock(
-            cartItem.productId,
-            safeQty,
-          );
-
-          // Keep in-memory list in sync too, if the product happens to be found there
-          int pIdx = widget.products.indexWhere((p) => p.id == cartItem.productId);
-          if (pIdx >= 0) {
-            widget.products[pIdx].stockQuantity = safeQty;
-          }
-        } catch (e) {
-          debugPrint("Error deducting stock for ${cartItem.productId}: $e");
-        }
-      } else {
-        // Fallback for no-auth/local-only scenario: deduct from local list & SQLite only
-        int pIdx = widget.products.indexWhere((p) => p.id == cartItem.productId);
-        if (pIdx >= 0) {
-          final newQuantity = widget.products[pIdx].stockQuantity - cartItem.quantity;
-          final updatedStock = newQuantity < 0 ? 0 : newQuantity;
-
-          widget.products[pIdx].stockQuantity = updatedStock;
-
-          await LocalDbService.instance.updateStock(
-            widget.products[pIdx].id,
-            updatedStock,
-          );
-        }
-      }
-    }
+    await _deductStockForCartItems();
 
     final phone = _customerPhoneController.text.trim();
     final customerName = _customerNameController.text.trim();
