@@ -1,4 +1,8 @@
-import 'dart:convert';
+import 'dart0000000:json';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../models/product.dart';
+import '../services/local_db_service.dart';
 
 class CartItem {
   final String productId;
@@ -13,6 +17,8 @@ class CartItem {
     required this.unitPrice,
   });
 
+  double get totalPrice => quantity * unitPrice;
+
   Map<String, dynamic> toMap() {
     return {
       'productId': productId,
@@ -24,14 +30,10 @@ class CartItem {
 
   factory CartItem.fromMap(Map<String, dynamic> map) {
     return CartItem(
-      productId: map['productId']?.toString() ?? '',
-      productName: map['productName']?.toString() ?? '',
-      quantity: (map['quantity'] is num)
-          ? (map['quantity'] as num).toInt()
-          : int.tryParse(map['quantity']?.toString() ?? '1') ?? 1,
-      unitPrice: (map['unitPrice'] is num)
-          ? (map['unitPrice'] as num).toDouble()
-          : double.tryParse(map['unitPrice']?.toString() ?? '0') ?? 0.0,
+      productId: map['productId'] ?? '',
+      productName: map['productName'] ?? '',
+      quantity: map['quantity'] ?? 1,
+      unitPrice: (map['unitPrice'] as num).toDouble(),
     );
   }
 }
@@ -39,12 +41,13 @@ class CartItem {
 class SaleTransaction {
   final String id;
   final double totalAmount;
-  final String paymentMethod;
+  final String paymentMethod; // "CASH", "MPESA", "CREDIT"
   bool isPaid;
   final List<CartItem> items;
   final String customerName;
   final String customerPhone;
   final DateTime? dueDate;
+  String mpesaCode;
   final DateTime createdAt;
 
   SaleTransaction({
@@ -56,6 +59,7 @@ class SaleTransaction {
     this.customerName = '',
     this.customerPhone = '',
     this.dueDate,
+    this.mpesaCode = '',
     required this.createdAt,
   });
 
@@ -69,6 +73,7 @@ class SaleTransaction {
       'customerName': customerName,
       'customerPhone': customerPhone,
       'dueDate': dueDate?.toIso8601String(),
+      'mpesaCode': mpesaCode,
       'createdAt': createdAt.toIso8601String(),
     };
   }
@@ -77,52 +82,56 @@ class SaleTransaction {
     List<CartItem> parsedItems = [];
     if (map['items'] != null) {
       if (map['items'] is String) {
-        try {
-          final List<dynamic> decodedList = jsonDecode(map['items']);
-          parsedItems = decodedList.map((e) => CartItem.fromMap(e as Map<String, dynamic>)).toList();
-        } catch (_) {}
+        final List dynamicList = jsonDecode(map['items']);
+        parsedItems = dynamicList.map((x) => CartItem.fromMap(x)).toList();
       } else if (map['items'] is List) {
-        parsedItems = (map['items'] as List)
-            .map((e) => CartItem.fromMap(e as Map<String, dynamic>))
-            .toList();
-      }
-    }
-
-    DateTime parsedCreatedAt;
-    if (map['createdAt'] != null) {
-      parsedCreatedAt = DateTime.tryParse(map['createdAt'].toString()) ?? DateTime.now();
-    } else {
-      parsedCreatedAt = DateTime.now();
-    }
-
-    DateTime? parsedDueDate;
-    if (map['dueDate'] != null) {
-      parsedDueDate = DateTime.tryParse(map['dueDate'].toString());
-    }
-
-    bool paidStatus = false;
-    if (map['isPaid'] != null) {
-      if (map['isPaid'] is bool) {
-        paidStatus = map['isPaid'];
-      } else if (map['isPaid'] is num) {
-        paidStatus = map['isPaid'] == 1;
-      } else if (map['isPaid'] is String) {
-        paidStatus = map['isPaid'] == '1' || map['isPaid'].toString().toLowerCase() == 'true';
+        parsedItems = (map['items'] as List).map((x) => CartItem.fromMap(x)).toList();
       }
     }
 
     return SaleTransaction(
-      id: map['id']?.toString() ?? '',
-      totalAmount: (map['totalAmount'] is num)
-          ? (map['totalAmount'] as num).toDouble()
-          : double.tryParse(map['totalAmount']?.toString() ?? '0') ?? 0.0,
-      paymentMethod: map['paymentMethod']?.toString() ?? 'CASH',
-      isPaid: paidStatus,
+      id: map['id'] ?? '',
+      totalAmount: (map['totalAmount'] as num).toDouble(),
+      paymentMethod: map['paymentMethod'] ?? 'CASH',
+      isPaid: map['isPaid'] == 1 || map['isPaid'] == true,
       items: parsedItems,
-      customerName: map['customerName']?.toString() ?? '',
-      customerPhone: map['customerPhone']?.toString() ?? '',
-      dueDate: parsedDueDate,
-      createdAt: parsedCreatedAt,
+      customerName: map['customerName'] ?? '',
+      customerPhone: map['customerPhone'] ?? '',
+      dueDate: map['dueDate'] != null ? DateTime.tryParse(map['dueDate']) : null,
+      mpesaCode: map['mpesaCode'] ?? '',
+      createdAt: map['createdAt'] != null ? DateTime.parse(map['createdAt']) : DateTime.now(),
     );
+  }
+
+  /// Deducts sold item quantities from both Firestore and Local DB for all current products.
+  Future<void> processStockDeduction(List<Product> availableProducts) async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    for (final cartItem in items) {
+      final int productIdx = availableProducts.indexWhere((p) => p.id == cartItem.productId);
+      
+      if (productIdx != -1) {
+        final product = availableProducts[productIdx];
+        final int newStock = (product.stockQuantity - cartItem.quantity) < 0 
+            ? 0 
+            : product.stockQuantity - cartItem.quantity;
+
+        // Update local object memory
+        product.stockQuantity = newStock;
+
+        // Update local SQLite DB
+        await LocalDbService.instance.updateStock(product.id, newStock);
+
+        // Update Cloud Firestore
+        if (user != null) {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid)
+              .collection('products')
+              .doc(product.id)
+              .update({'stockQuantity': newStock});
+        }
+      }
+    }
   }
 }
