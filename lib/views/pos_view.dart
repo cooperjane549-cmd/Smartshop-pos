@@ -252,30 +252,57 @@ class _PosViewState extends State<PosView> {
 
     final user = FirebaseAuth.instance.currentUser;
 
-    // Deduct stock locally & via database for every item in cart
+    // Deduct stock directly in Firestore by product ID (atomic increment),
+    // independent of whatever is currently in widget.products.
     for (var cartItem in _cart) {
-      int pIdx = widget.products.indexWhere((p) => p.id == cartItem.productId);
-      if (pIdx >= 0) {
-        final newQuantity = widget.products[pIdx].stockQuantity - cartItem.quantity;
-        final updatedStock = newQuantity < 0 ? 0 : newQuantity;
+      if (user != null) {
+        final productRef = FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('products')
+            .doc(cartItem.productId);
 
-        // Update local memory list
-        widget.products[pIdx].stockQuantity = updatedStock;
+        try {
+          await productRef.update({
+            'stockQuantity': FieldValue.increment(-cartItem.quantity),
+          });
 
-        // Update local SQLite DB
-        await LocalDbService.instance.updateStock(
-          widget.products[pIdx].id,
-          updatedStock,
-        );
+          final updatedDoc = await productRef.get();
+          final newQty = (updatedDoc.data()?['stockQuantity'] ?? 0) as int;
+          final safeQty = newQty < 0 ? 0 : newQty;
 
-        // Update Firestore Cloud Database
-        if (user != null) {
-          await FirebaseFirestore.instance
-              .collection('users')
-              .doc(user.uid)
-              .collection('products')
-              .doc(widget.products[pIdx].id)
-              .update({'stockQuantity': updatedStock});
+          if (safeQty != newQty) {
+            // Clamp negative stock back to 0 in Firestore if it ever occurs
+            await productRef.update({'stockQuantity': safeQty});
+          }
+
+          // Keep local SQLite DB in sync
+          await LocalDbService.instance.updateStock(
+            cartItem.productId,
+            safeQty,
+          );
+
+          // Keep in-memory list in sync too, if the product happens to be found there
+          int pIdx = widget.products.indexWhere((p) => p.id == cartItem.productId);
+          if (pIdx >= 0) {
+            widget.products[pIdx].stockQuantity = safeQty;
+          }
+        } catch (e) {
+          debugPrint("Error deducting stock for ${cartItem.productId}: $e");
+        }
+      } else {
+        // Fallback for no-auth/local-only scenario: deduct from local list & SQLite only
+        int pIdx = widget.products.indexWhere((p) => p.id == cartItem.productId);
+        if (pIdx >= 0) {
+          final newQuantity = widget.products[pIdx].stockQuantity - cartItem.quantity;
+          final updatedStock = newQuantity < 0 ? 0 : newQuantity;
+
+          widget.products[pIdx].stockQuantity = updatedStock;
+
+          await LocalDbService.instance.updateStock(
+            widget.products[pIdx].id,
+            updatedStock,
+          );
         }
       }
     }
