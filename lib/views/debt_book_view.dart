@@ -282,12 +282,16 @@ class _DebtBookViewState extends State<DebtBookView> {
                                 ];
 
                       // 1. Record this debt addition as its own transaction for history/audit
+                      // ONLY — marked as 'CREDIT_ADDITION' + isPaid:true so this history
+                      // record is excluded from the debtors list query (which filters
+                      // strictly on paymentMethod == 'CREDIT' && !isPaid). The real
+                      // outstanding balance lives on the original `sale`, updated below.
                       final String additionSaleId = 'DEBTADD_${now.millisecondsSinceEpoch}';
                       final additionSale = SaleTransaction(
                         id: additionSaleId,
                         totalAmount: enteredAmount,
-                        paymentMethod: 'CREDIT',
-                        isPaid: false,
+                        paymentMethod: 'CREDIT_ADDITION',
+                        isPaid: true,
                         items: additionItems,
                         customerName: sale.customerName,
                         customerPhone: sale.customerPhone,
