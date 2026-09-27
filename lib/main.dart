@@ -58,6 +58,13 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
   String _storeTillNumber = '3043489';
   bool _isSubscribed = false;
 
+  // Holds a pending "merge this sale into an existing debtor" request handed
+  // off from PosView, so DebtBookView can auto-open the Add Debt dialog
+  // pre-filled with the new amount and items.
+  String? _autoOpenDebtSaleId;
+  double? _autoOpenDebtAmount;
+  List<CartItem>? _autoOpenDebtItems;
+
   @override
   void initState() {
     super.initState();
@@ -85,6 +92,26 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
         setState(() {
           _sales.clear();
           _sales.addAll(loadedSales);
+        });
+      });
+
+      // Stream real-time product inventory so the Hub's product list never
+      // goes stale or out of sync with what's actually in Firestore.
+      _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('products')
+          .snapshots()
+          .listen((snapshot) {
+        if (!mounted) return;
+        final loadedProducts = snapshot.docs.map((doc) {
+          final data = Map<String, dynamic>.from(doc.data());
+          data['id'] = doc.id;
+          return Product.fromMap(data);
+        }).toList();
+        setState(() {
+          _products.clear();
+          _products.addAll(loadedProducts);
         });
       });
 
@@ -224,16 +251,46 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     }
   }
 
+  // Called by PosView when a CREDIT sale's phone number matches an existing
+  // unpaid debtor. Switches to the Debtors tab and tells DebtBookView to
+  // auto-open the Add Debt dialog, pre-filled with the new amount/items.
+  void _handleExistingDebtFound(
+    String saleId,
+    double amount,
+    List<CartItem> items,
+  ) {
+    if (!mounted) return;
+    setState(() {
+      _autoOpenDebtSaleId = saleId;
+      _autoOpenDebtAmount = amount;
+      _autoOpenDebtItems = items;
+      _currentIndex = 3;
+    });
+  }
+
+  // Clears the pending auto-open request once DebtBookView has handled it,
+  // so it doesn't re-trigger if the user navigates away and back.
+  void _clearAutoOpenDebt() {
+    if (!mounted) return;
+    setState(() {
+      _autoOpenDebtSaleId = null;
+      _autoOpenDebtAmount = null;
+      _autoOpenDebtItems = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final views = [
       DashboardView(sales: _sales),
       PosView(
         products: _products,
+        sales: _sales,
         onSaleCompleted: (sale) {
           _handleSaleCompleted(sale);
         },
         onCreditSelected: _switchToDebtorsTab,
+        onExistingDebtFound: _handleExistingDebtFound,
       ),
       InventoryView(
         products: _products,
@@ -276,6 +333,10 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
             });
           }
         },
+        autoOpenSaleId: _autoOpenDebtSaleId,
+        autoAddAmount: _autoOpenDebtAmount,
+        autoAddItems: _autoOpenDebtItems,
+        onAutoAddHandled: _clearAutoOpenDebt,
       ),
     ];
 
