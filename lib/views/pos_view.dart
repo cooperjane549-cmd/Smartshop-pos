@@ -7,6 +7,7 @@ import '../models/product.dart';
 import '../models/sale_transaction.dart';
 import '../services/local_db_service.dart';
 import '../services/firebase_service.dart';
+import '../services/shop_profile_service.dart';
 import 'receipt_view.dart';
 
 class PosView extends StatefulWidget {
@@ -42,6 +43,21 @@ class _PosViewState extends State<PosView> {
   final _searchController = TextEditingController();
   String _searchQuery = '';
   DateTime? _selectedDueDate;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPersistedShopName();
+  }
+
+  // Loads the shop name the owner previously saved (via a completed sale),
+  // so it's pre-filled instead of defaulting to "SmartShop" every time.
+  Future<void> _loadPersistedShopName() async {
+    final savedName = await ShopProfileService.instance.getShopName();
+    if (mounted) {
+      setState(() => _shopNameController.text = savedName);
+    }
+  }
 
   @override
   void dispose() {
@@ -464,12 +480,18 @@ class _PosViewState extends State<PosView> {
       );
     }
 
+    // Save the shop name for next time, so it's remembered and pre-filled
+    // on future sales instead of defaulting back to "SmartShop".
+    await ShopProfileService.instance.setShopName(shopName);
+
     if (!mounted) return;
 
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ReceiptView(sale: sale),
+        // Previously shopName was collected but never passed here, so the
+        // receipt always silently fell back to its default. Now fixed.
+        builder: (context) => ReceiptView(sale: sale, shopName: shopName),
       ),
     );
 
