@@ -44,13 +44,21 @@ class _ReceiptViewState extends State<ReceiptView> {
 
   Future<void> _refreshBluetoothState() async {
     await _printerService.requestBluetoothPermissions();
-    final isOn = await _printerService.ensureBluetoothOn();
+    final isOn = await _printerService.isBluetoothOn();
     if (!mounted) return;
 
     setState(() => _isBluetoothOn = isOn);
 
     if (isOn) {
       await _loadBondedDevices();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Bluetooth is off. Tap "Pair New Printer" to open settings and turn it on.',
+          ),
+        ),
+      );
     }
   }
 
