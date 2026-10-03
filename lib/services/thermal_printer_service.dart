@@ -21,25 +21,18 @@ class ThermalPrinterService {
     return statuses.values.every((s) => s.isGranted || s.isLimited);
   }
 
-  /// Checks if the device's Bluetooth radio is on; if not, prompts the
-  /// system "turn on Bluetooth" dialog. Returns the final on/off state.
-  Future<bool> ensureBluetoothOn() async {
-    final isOn = await _bluetooth.isOn ?? false;
-    if (!isOn) {
-      try {
-        await _bluetooth.requestEnable();
-        await Future.delayed(const Duration(seconds: 1));
-      } catch (_) {
-        // User may have declined the system prompt.
-      }
-      return await _bluetooth.isOn ?? false;
-    }
-    return true;
+  /// Checks if the device's Bluetooth radio is currently on. The
+  /// blue_thermal_printer package has no API to programmatically trigger
+  /// the system "turn on Bluetooth" prompt, so if it's off, the caller
+  /// should direct the user to system settings instead (see
+  /// openSystemBluetoothSettings below).
+  Future<bool> isBluetoothOn() async {
+    return await _bluetooth.isOn ?? false;
   }
 
-  /// Opens the system Bluetooth settings screen so the user can pair a new
-  /// printer that isn't bonded yet. After pairing, they return to the app
-  /// and tap "Refresh" to reload the bonded devices list.
+  /// Opens the system Bluetooth settings screen — used both to let the user
+  /// turn Bluetooth on manually, and to pair a new printer that isn't
+  /// bonded yet. After returning to the app, they should tap "Refresh".
   Future<void> openSystemBluetoothSettings() async {
     await AppSettings.openAppSettings(type: AppSettingsType.bluetooth);
   }
