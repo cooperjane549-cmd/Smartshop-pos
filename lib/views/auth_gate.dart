@@ -39,6 +39,11 @@ class AuthGate extends StatelessWidget {
 /// Firestore profile doc exists (and has a referral code), and if this is a
 /// brand-new user, prompts them once for an optional referral code before
 /// entering the app.
+///
+/// Wrapped defensively: any error here is caught and logged rather than
+/// left to silently hang the app on the loading spinner, and a hard
+/// timeout guarantees the app always proceeds within a few seconds even if
+/// Firestore is unreachable or a permission rule blocks something.
 class _PostAuthInitializer extends StatefulWidget {
   final User user;
   const _PostAuthInitializer({required this.user});
@@ -57,6 +62,18 @@ class _PostAuthInitializerState extends State<_PostAuthInitializer> {
   }
 
   Future<void> _initialize() async {
+    try {
+      await _doInitialize().timeout(const Duration(seconds: 8));
+    } catch (e) {
+      debugPrint('AuthGate initialization error (proceeding anyway): $e');
+    } finally {
+      if (mounted) {
+        setState(() => _ready = true);
+      }
+    }
+  }
+
+  Future<void> _doInitialize() async {
     final firestore = FirebaseFirestore.instance;
     final userDocRef = firestore.collection('users').doc(widget.user.uid);
     final existingDoc = await userDocRef.get();
@@ -74,10 +91,6 @@ class _PostAuthInitializerState extends State<_PostAuthInitializer> {
 
     if (isBrandNewUser && mounted) {
       await _showReferralCodePrompt();
-    }
-
-    if (mounted) {
-      setState(() => _ready = true);
     }
   }
 
@@ -113,10 +126,14 @@ class _PostAuthInitializerState extends State<_PostAuthInitializer> {
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
             onPressed: () async {
-              await ReferralService.instance.recordReferralIfNew(
-                widget.user.uid,
-                controller.text.trim().isEmpty ? null : controller.text.trim(),
-              );
+              try {
+                await ReferralService.instance.recordReferralIfNew(
+                  widget.user.uid,
+                  controller.text.trim().isEmpty ? null : controller.text.trim(),
+                );
+              } catch (e) {
+                debugPrint('Referral recording error (ignored): $e');
+              }
               if (ctx.mounted) Navigator.pop(ctx);
             },
             child: const Text('Continue', style: TextStyle(color: Colors.white)),
