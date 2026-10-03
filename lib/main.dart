@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'models/product.dart';
 import 'models/sale_transaction.dart';
 import 'services/sms_parser_service.dart';
+import 'services/referral_service.dart';
 import 'views/dashboard_view.dart';
 import 'views/pos_view.dart';
 import 'views/inventory_view.dart';
@@ -12,7 +13,6 @@ import 'views/debt_book_view.dart';
 import 'views/auth_gate.dart';
 
 void main() async {
-  // Ensure native bindings are attached before running any plugin calls
   WidgetsFlutterBinding.ensureInitialized();
   try {
     await Firebase.initializeApp();
@@ -58,9 +58,6 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
   String _storeTillNumber = '3043489';
   bool _isSubscribed = false;
 
-  // Holds a pending "merge this sale into an existing debtor" request handed
-  // off from PosView, so DebtBookView can auto-open the Add Debt dialog
-  // pre-filled with the new amount and items.
   String? _autoOpenDebtSaleId;
   double? _autoOpenDebtAmount;
   List<CartItem>? _autoOpenDebtItems;
@@ -72,13 +69,11 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     _initSmsListener();
   }
 
-  // Load sales history permanently from Cloud Firestore so it survives refresh
   void _loadFirestoreData() async {
     final user = _auth.currentUser;
     if (user == null) return;
 
     try {
-      // Stream real-time sales history
       _firestore
           .collection('users')
           .doc(user.uid)
@@ -95,8 +90,6 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
         });
       });
 
-      // Stream real-time product inventory so the Hub's product list never
-      // goes stale or out of sync with what's actually in Firestore.
       _firestore
           .collection('users')
           .doc(user.uid)
@@ -115,7 +108,10 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
         });
       });
 
-      // Stream subscription status
+      // Stream subscription status. Whenever isSubscribed is true, also
+      // notify ReferralService — it's idempotent (only credits once per
+      // referred user via an internal flag), so it's safe to call on every
+      // snapshot rather than only on the first transition.
       _firestore
           .collection('users')
           .doc(user.uid)
@@ -130,6 +126,11 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
           setState(() {
             _isSubscribed = DateTime.now().isBefore(expiry);
           });
+
+          final bool isSubscribedFlag = data['isSubscribed'] ?? false;
+          if (isSubscribedFlag) {
+            ReferralService.instance.onUserUpgraded(user.uid);
+          }
         }
       });
     } catch (e) {
@@ -158,7 +159,6 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
               matchedCode = payment.code;
               matchedAmount = payment.amount;
 
-              // Update Firestore status permanently
               if (user != null) {
                 await _firestore
                     .collection('users')
@@ -234,7 +234,6 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     }
   }
 
-  // Save newly generated sales to Firestore immediately upon completion
   void _handleSaleCompleted(SaleTransaction sale) async {
     final user = _auth.currentUser;
     if (user != null) {
@@ -251,9 +250,6 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     }
   }
 
-  // Called by PosView when a CREDIT sale's phone number matches an existing
-  // unpaid debtor. Switches to the Debtors tab and tells DebtBookView to
-  // auto-open the Add Debt dialog, pre-filled with the new amount/items.
   void _handleExistingDebtFound(
     String saleId,
     double amount,
@@ -268,8 +264,6 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
     });
   }
 
-  // Clears the pending auto-open request once DebtBookView has handled it,
-  // so it doesn't re-trigger if the user navigates away and back.
   void _clearAutoOpenDebt() {
     if (!mounted) return;
     setState(() {
