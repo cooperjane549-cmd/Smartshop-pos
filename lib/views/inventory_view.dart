@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/product.dart';
 import '../services/local_db_service.dart';
+import '../services/pin_service.dart';
+import '../widgets/pin_dialog.dart';
 
 class InventoryView extends StatefulWidget {
   final List<Product> products;
@@ -44,10 +46,22 @@ class _InventoryViewState extends State<InventoryView> {
     super.dispose();
   }
 
-  // Get user's Firestore product collection reference
   CollectionReference? get _productsCollection {
     if (_user == null) return null;
     return _firestore.collection('users').doc(_user!.uid).collection('products');
+  }
+
+  // Entry point for the "+" FAB. If no security PIN exists yet, forces
+  // setup first (per owner's requirement), then proceeds to the normal
+  // add-product dialog either way. Adding a product itself never requires
+  // PIN entry afterwards — only editing/deleting does.
+  Future<void> _handleAddButtonPressed() async {
+    final hasPin = await PinService.instance.hasPinSet();
+    if (!hasPin) {
+      final created = await PinDialog.showSetup(context);
+      if (!created) return; // user cancelled PIN setup entirely
+    }
+    _showAddProductDialog();
   }
 
   void _showAddProductDialog() {
@@ -110,10 +124,8 @@ class _InventoryViewState extends State<InventoryView> {
                       : stockController.text.trim()),
                 );
 
-                // Save to SQLite Local DB first
                 await LocalDbService.instance.insertProduct(product.toMap());
 
-                // Save directly to Firestore with matching explicit ID in document body
                 final productData = product.toMap();
                 productData['id'] = docId;
                 await _productsCollection!.doc(docId).set(productData);
@@ -191,13 +203,11 @@ class _InventoryViewState extends State<InventoryView> {
                   lowStockAlertThreshold: product.lowStockAlertThreshold,
                 );
 
-                // Update Local SQLite DB
                 await LocalDbService.instance.updateStock(
                   updatedProduct.id,
                   updatedProduct.stockQuantity,
                 );
 
-                // Update directly on Firestore
                 await _productsCollection!.doc(product.id).update(updatedProduct.toMap());
 
                 if (widget.onProductUpdated != null) {
@@ -233,7 +243,6 @@ class _InventoryViewState extends State<InventoryView> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
               if (_productsCollection != null) {
-                // Delete directly from Firestore
                 await _productsCollection!.doc(product.id).delete();
               }
 
@@ -313,7 +322,7 @@ class _InventoryViewState extends State<InventoryView> {
 
                 final productsList = snapshot.data!.docs.map((doc) {
                   Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-                  data['id'] = doc.id; // Enforce matching document ID
+                  data['id'] = doc.id;
                   return Product.fromMap(data);
                 }).where((item) {
                   if (_searchQuery.isEmpty) return true;
@@ -360,11 +369,23 @@ class _InventoryViewState extends State<InventoryView> {
                             ),
                             IconButton(
                               icon: const Icon(Icons.edit, color: Colors.indigo),
-                              onPressed: () => _showEditProductDialog(item),
+                              onPressed: () async {
+                                final verified = await PinDialog.verify(
+                                  context,
+                                  reason: 'Enter PIN to edit this product.',
+                                );
+                                if (verified) _showEditProductDialog(item);
+                              },
                             ),
                             IconButton(
                               icon: const Icon(Icons.delete, color: Colors.red),
-                              onPressed: () => _confirmDeleteProduct(item),
+                              onPressed: () async {
+                                final verified = await PinDialog.verify(
+                                  context,
+                                  reason: 'Enter PIN to delete this product.',
+                                );
+                                if (verified) _confirmDeleteProduct(item);
+                              },
                             ),
                           ],
                         ),
@@ -379,7 +400,7 @@ class _InventoryViewState extends State<InventoryView> {
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.indigo,
-        onPressed: _showAddProductDialog,
+        onPressed: _handleAddButtonPressed,
         child: const Icon(Icons.add, color: Colors.white),
       ),
     );
