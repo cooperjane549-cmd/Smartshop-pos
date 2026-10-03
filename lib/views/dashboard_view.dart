@@ -6,8 +6,10 @@ import '../models/sale_transaction.dart';
 import '../services/auth_service.dart';
 import '../services/local_db_service.dart';
 import '../services/referral_service.dart';
+import '../services/app_config_service.dart';
 import '../widgets/pin_dialog.dart';
 import 'upgrade_dialog.dart';
+import 'terms_view.dart';
 
 class DashboardView extends StatefulWidget {
   final List<SaleTransaction> sales;
@@ -262,6 +264,90 @@ class _DashboardViewState extends State<DashboardView> {
     );
   }
 
+  // Contact Us + Terms & Conditions card — all contact details and T&Cs
+  // text are fetched from Firestore (app_config/general), never hardcoded.
+  Widget _buildContactAndTermsCard() {
+    return FutureBuilder<AppConfig>(
+      future: AppConfigService.instance.getConfig(),
+      builder: (context, snapshot) {
+        final config = snapshot.data;
+
+        return Card(
+          elevation: 2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Contact Us',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 10),
+                if (snapshot.connectionState == ConnectionState.waiting)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8.0),
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else if (config != null) ...[
+                  if (config.contactWhatsapp.isNotEmpty)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.chat, color: Colors.green),
+                      title: Text('WhatsApp: ${config.contactWhatsapp}'),
+                      onTap: () async {
+                        final phone = config.contactWhatsapp.replaceAll(RegExp(r'\D'), '');
+                        final formatted =
+                            phone.startsWith('0') ? '254${phone.substring(1)}' : phone;
+                        final uri = Uri.parse('https://wa.me/$formatted');
+                        if (await canLaunchUrl(uri)) {
+                          await launchUrl(uri, mode: LaunchMode.externalApplication);
+                        }
+                      },
+                    ),
+                  if (config.contactPhone.isNotEmpty)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.call, color: Colors.indigo),
+                      title: Text('Call: ${config.contactPhone}'),
+                      onTap: () async {
+                        final uri = Uri.parse('tel:${config.contactPhone}');
+                        if (await canLaunchUrl(uri)) await launchUrl(uri);
+                      },
+                    ),
+                  if (config.contactEmail.isNotEmpty)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.email, color: Colors.orange),
+                      title: Text('Email: ${config.contactEmail}'),
+                      onTap: () async {
+                        final uri = Uri.parse('mailto:${config.contactEmail}');
+                        if (await canLaunchUrl(uri)) await launchUrl(uri);
+                      },
+                    ),
+                ],
+                const Divider(height: 20),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.description_outlined, color: Colors.grey),
+                  title: const Text('Terms & Conditions'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const TermsView()),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final User? user = _authService.currentUser;
@@ -467,6 +553,9 @@ class _DashboardViewState extends State<DashboardView> {
                     const SizedBox(height: 12),
 
                     if (user != null) _buildReferralCard(user.uid),
+                    const SizedBox(height: 12),
+
+                    _buildContactAndTermsCard(),
                     const SizedBox(height: 20),
 
                     const Text(
