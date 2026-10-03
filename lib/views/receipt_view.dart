@@ -1,10 +1,12 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:blue_thermal_printer/blue_thermal_printer.dart' as bt;
-import 'package:url_launcher/url_launcher.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../models/sale_transaction.dart';
 import '../services/thermal_printer_service.dart';
 
@@ -17,7 +19,7 @@ class ReceiptView extends StatefulWidget {
   const ReceiptView({
     Key? key,
     required this.sale,
-    this.shopName = 'SMARTSHOP POS',
+    this.shopName = 'SmartShop',
     this.shopPhone = '',
     this.shopAddress = '',
   }) : super(key: key);
@@ -30,93 +32,137 @@ class _ReceiptViewState extends State<ReceiptView> {
   final ThermalPrinterService _printerService = ThermalPrinterService();
   List<bt.BluetoothDevice> _devices = [];
   bt.BluetoothDevice? _selectedDevice;
+  bool _isBluetoothOn = false;
+  bool _isConnected = false;
+  bool _isBusy = false;
 
   @override
   void initState() {
     super.initState();
-    _loadBluetoothDevices();
+    _refreshBluetoothState();
   }
 
-  void _loadBluetoothDevices() async {
-    List<bt.BluetoothDevice> list = await _printerService.getBondedDevices();
+  Future<void> _refreshBluetoothState() async {
+    await _printerService.requestBluetoothPermissions();
+    final isOn = await _printerService.ensureBluetoothOn();
+    if (!mounted) return;
+
+    setState(() => _isBluetoothOn = isOn);
+
+    if (isOn) {
+      await _loadBondedDevices();
+    }
+  }
+
+  Future<void> _loadBondedDevices() async {
+    final list = await _printerService.getBondedDevices();
+    final connected = await _printerService.isConnected();
     if (!mounted) return;
     setState(() {
       _devices = list;
-      if (_devices.isNotEmpty) _selectedDevice = _devices.first;
+      _isConnected = connected;
+      if (_selectedDevice == null && _devices.isNotEmpty) {
+        _selectedDevice = _devices.first;
+      }
     });
   }
 
+  Future<void> _connectToSelectedDevice() async {
+    if (_selectedDevice == null) return;
+    setState(() => _isBusy = true);
+    try {
+      await _printerService.connect(_selectedDevice!);
+      if (!mounted) return;
+      setState(() => _isConnected = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Connected to ${_selectedDevice!.name ?? "printer"}.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not connect: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
+  }
+
   Future<void> _printThermal() async {
-    if (_selectedDevice != null) {
-      await _printerService.printTextSample(
+    if (!_isBluetoothOn) {
+      await _refreshBluetoothState();
+      if (!_isBluetoothOn) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please turn on Bluetooth to print.')),
+        );
+        return;
+      }
+    }
+
+    if (_devices.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No paired printer found. Tap "Pair New Printer" below.')),
+      );
+      return;
+    }
+
+    if (!_isConnected) {
+      await _connectToSelectedDevice();
+    }
+
+    if (!_isConnected) return;
+
+    setState(() => _isBusy = true);
+    try {
+      await _printerService.printReceiptForSale(
+        widget.sale,
         widget.shopName,
-        "Total: KES ${widget.sale.totalAmount.toStringAsFixed(0)}",
+        shopPhone: widget.shopPhone,
+        shopAddress: widget.shopAddress,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Receipt sent to printer!')),
       );
-    } else {
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No Bluetooth printer selected.')),
+        SnackBar(content: Text('Print failed: $e')),
       );
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
     }
   }
 
-  Future<void> _sendWhatsAppReceipt() async {
-    String? phone = widget.sale.customerPhone;
-    if (phone == null || phone.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No customer phone number available for this sale.'),
-        ),
+  Future<void> _pairNewPrinter() async {
+    await _printerService.openSystemBluetoothSettings();
+    // User pairs in system settings, then returns here and taps Refresh.
+  }
+
+  // Shares the receipt as an actual PDF file via Android's native share
+  // sheet. WhatsApp can be picked from there — the cashier then selects the
+  // contact manually, since WhatsApp's link API cannot both pre-fill a
+  // number and attach a file in one step.
+  Future<void> _sharePdfReceipt() async {
+    setState(() => _isBusy = true);
+    try {
+      final bytes = await _generatePdfReceipt(PdfPageFormat.a4);
+      final tempDir = await getTemporaryDirectory();
+      final file = File('${tempDir.path}/receipt_${widget.sale.id}.pdf');
+      await file.writeAsBytes(bytes);
+
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'Receipt from ${widget.shopName}',
       );
-      return;
-    }
-
-    String cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    if (cleanPhone.startsWith('0')) {
-      cleanPhone = '254${cleanPhone.substring(1)}';
-    } else if (cleanPhone.startsWith('+')) {
-      cleanPhone = cleanPhone.substring(1);
-    }
-
-    StringBuffer buffer = StringBuffer();
-    buffer.writeln("*${widget.shopName.toUpperCase()}*");
-    if (widget.shopAddress.isNotEmpty) buffer.writeln(widget.shopAddress);
-    if (widget.shopPhone.isNotEmpty) buffer.writeln("Tel: ${widget.shopPhone}");
-    buffer.writeln("--------------------------------");
-    buffer.writeln("Receipt ID: ${widget.sale.id}");
-    buffer.writeln("Date: ${widget.sale.createdAt.toString().split('.')[0]}");
-    buffer.writeln("Payment Method: ${widget.sale.paymentMethod}");
-    if (widget.sale.mpesaCode.isNotEmpty) {
-      buffer.writeln("M-Pesa Code: ${widget.sale.mpesaCode}");
-    }
-    buffer.writeln("--------------------------------");
-    buffer.writeln("*ITEMS PURCHASED:*");
-    for (var item in widget.sale.items) {
-      buffer.writeln(
-        "• ${item.productName} x${item.quantity} - KES ${(item.quantity * item.unitPrice).toStringAsFixed(0)}",
-      );
-    }
-    buffer.writeln("--------------------------------");
-    buffer.writeln(
-      "*TOTAL: KES ${widget.sale.totalAmount.toStringAsFixed(0)}*",
-    );
-    buffer.writeln("\nThank you for shopping with us!");
-
-    final uri = Uri.parse(
-      "https://wa.me/$cleanPhone?text=${Uri.encodeComponent(buffer.toString())}",
-    );
-
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open WhatsApp.')),
+        SnackBar(content: Text('Could not share receipt: $e')),
       );
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
     }
   }
 
@@ -129,39 +175,88 @@ class _ReceiptViewState extends State<ReceiptView> {
         actions: [
           IconButton(
             icon: const Icon(Icons.share),
-            tooltip: 'Send via WhatsApp',
-            onPressed: _sendWhatsAppReceipt,
+            tooltip: 'Share Receipt (PDF)',
+            onPressed: _isBusy ? null : _sharePdfReceipt,
           ),
           IconButton(
             icon: const Icon(Icons.print),
             tooltip: 'Print Thermal Receipt',
-            onPressed: _printThermal,
+            onPressed: _isBusy ? null : _printThermal,
           ),
         ],
       ),
       body: Column(
         children: [
-          if (_devices.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Row(
-                children: [
-                  const Text("Printer: "),
-                  Expanded(
-                    child: DropdownButton<bt.BluetoothDevice>(
-                      value: _selectedDevice,
-                      items: _devices.map((device) {
-                        return DropdownMenuItem(
-                          value: device,
-                          child: Text(device.name ?? 'Unknown Device'),
-                        );
-                      }).toList(),
-                      onChanged: (val) => setState(() => _selectedDevice = val),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            color: Colors.indigo.shade50,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      _isConnected ? Icons.bluetooth_connected : Icons.bluetooth,
+                      color: _isConnected ? Colors.green : Colors.grey,
+                      size: 20,
                     ),
+                    const SizedBox(width: 6),
+                    Text(
+                      !_isBluetoothOn
+                          ? 'Bluetooth is off'
+                          : _devices.isEmpty
+                              ? 'No paired printer found'
+                              : _isConnected
+                                  ? 'Connected: ${_selectedDevice?.name ?? ""}'
+                                  : 'Printer selected (not connected)',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                if (_devices.isNotEmpty)
+                  DropdownButton<bt.BluetoothDevice>(
+                    value: _selectedDevice,
+                    isExpanded: true,
+                    items: _devices.map((device) {
+                      return DropdownMenuItem(
+                        value: device,
+                        child: Text(device.name ?? 'Unknown Device'),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      setState(() {
+                        _selectedDevice = val;
+                        _isConnected = false;
+                      });
+                    },
                   ),
-                ],
-              ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    TextButton.icon(
+                      onPressed: _isBusy ? null : _refreshBluetoothState,
+                      icon: const Icon(Icons.refresh, size: 16),
+                      label: const Text('Refresh'),
+                    ),
+                    TextButton.icon(
+                      onPressed: _isBusy ? null : _pairNewPrinter,
+                      icon: const Icon(Icons.bluetooth_searching, size: 16),
+                      label: const Text('Pair New Printer'),
+                    ),
+                    if (_devices.isNotEmpty && !_isConnected)
+                      TextButton.icon(
+                        onPressed: _isBusy ? null : _connectToSelectedDevice,
+                        icon: const Icon(Icons.link, size: 16),
+                        label: const Text('Connect'),
+                      ),
+                  ],
+                ),
+              ],
             ),
+          ),
           Expanded(
             child: PdfPreview(
               build: (format) => _generatePdfReceipt(format),
@@ -190,7 +285,7 @@ class _ReceiptViewState extends State<ReceiptView> {
                 child: pw.Text(
                   widget.shopName,
                   style: pw.TextStyle(
-                    fontSize: 20,
+                    fontSize: 22,
                     fontWeight: pw.FontWeight.bold,
                   ),
                 ),
@@ -253,6 +348,13 @@ class _ReceiptViewState extends State<ReceiptView> {
               ),
               pw.SizedBox(height: 20),
               pw.Center(child: pw.Text("Thank you for shopping with us!")),
+              pw.SizedBox(height: 4),
+              pw.Center(
+                child: pw.Text(
+                  "Powered by SmartShop POS",
+                  style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),
+                ),
+              ),
             ],
           );
         },
