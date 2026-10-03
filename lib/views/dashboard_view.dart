@@ -5,6 +5,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/sale_transaction.dart';
 import '../services/auth_service.dart';
 import '../services/local_db_service.dart';
+import '../services/referral_service.dart';
+import '../widgets/pin_dialog.dart';
 import 'upgrade_dialog.dart';
 
 class DashboardView extends StatefulWidget {
@@ -20,7 +22,6 @@ class _DashboardViewState extends State<DashboardView> {
   final AuthService _authService = AuthService();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // Filter sales to show only records from the last 60 days (Option C Active View)
   List<SaleTransaction> get _activeSales {
     final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
     return widget.sales
@@ -42,7 +43,6 @@ class _DashboardViewState extends State<DashboardView> {
       .where((s) => s.paymentMethod == 'CREDIT' && !s.isPaid)
       .fold(0, (sum, s) => sum + s.totalAmount);
 
-  // Initialize automatic 10-day free trial for first-time users
   Future<void> _ensureTrialInitialized(String uid) async {
     final docRef = _firestore
         .collection('users')
@@ -61,8 +61,17 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
-  // Delete a single sale transaction completely
+  // Now PIN-gated: owner must enter their PIN before a recent (<60 day)
+  // sale can be deleted.
   Future<void> _deleteSaleTransaction(SaleTransaction sale) async {
+    final verified = await PinDialog.verify(
+      context,
+      reason: 'Enter PIN to delete this sale.',
+    );
+    if (!verified) return;
+
+    if (!mounted) return;
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -84,11 +93,9 @@ class _DashboardViewState extends State<DashboardView> {
 
     if (confirm == true) {
       final user = FirebaseAuth.instance.currentUser;
-      
-      // Clear locally
+
       await LocalDbService.instance.deleteSale(sale.id);
-      
-      // Remove from Firestore
+
       if (user != null) {
         await _firestore
             .collection('users')
@@ -110,7 +117,7 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
-  // Option C: Manual Purge Action Dialog
+  // Unchanged — 60+ day old sales still clear automatically, no PIN needed.
   void _showClearHistoryDialog() {
     final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
     final olderSales = widget.sales
@@ -137,9 +144,7 @@ class _DashboardViewState extends State<DashboardView> {
               onPressed: () async {
                 final user = FirebaseAuth.instance.currentUser;
                 for (var sale in olderSales) {
-                  // Clear locally
                   await LocalDbService.instance.deleteSale(sale.id);
-                  // Remove from Firestore
                   if (user != null) {
                     await _firestore
                         .collection('users')
@@ -163,6 +168,97 @@ class _DashboardViewState extends State<DashboardView> {
             ),
         ],
       ),
+    );
+  }
+
+  Future<void> _shareReferralCode(String code) async {
+    final message =
+        "Hey! I'm using SmartShop POS to manage my shop's sales, stock, and credit (mkopo) tracking. "
+        "Try it out and enter my referral code when you sign up: $code";
+    final uri = Uri.parse("https://wa.me/?text=${Uri.encodeComponent(message)}");
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  Widget _buildReferralCard(String uid) {
+    return StreamBuilder<DocumentSnapshot>(
+      stream: _firestore.collection('users').doc(uid).snapshots(),
+      builder: (context, snapshot) {
+        String code = '...';
+        int qualifiedCount = 0;
+
+        if (snapshot.hasData && snapshot.data!.exists) {
+          final data = snapshot.data!.data() as Map<String, dynamic>?;
+          code = data?['referralCode'] ?? '...';
+          qualifiedCount = (data?['referralQualifiedCount'] ?? 0) as int;
+        }
+
+        final remaining = ReferralService.referralsNeededForReward -
+            (qualifiedCount % ReferralService.referralsNeededForReward);
+
+        return Card(
+          elevation: 2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.card_giftcard, color: Colors.indigo, size: 28),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Refer & Earn',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Refer 5 shop owners who upgrade to Pro and get 1 free month.',
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.indigo.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        code,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 2,
+                          color: Colors.indigo,
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => _shareReferralCode(code),
+                        icon: const Icon(Icons.share, size: 16),
+                        label: const Text('Share'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '$qualifiedCount qualified referral(s) so far — $remaining more for your next free month.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -198,8 +294,6 @@ class _DashboardViewState extends State<DashboardView> {
         }
 
         final now = DateTime.now();
-        
-        // Lock screen activates if NOT a paying pro user AND expiry date has passed
         final bool isExpired = !isProUser && (expiryDate != null && now.isAfter(expiryDate));
 
         int daysRemaining = 0;
@@ -227,13 +321,11 @@ class _DashboardViewState extends State<DashboardView> {
           ),
           body: Stack(
             children: [
-              // Main Dashboard Content
               SingleChildScrollView(
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Google Profile Card
                     Card(
                       elevation: 2,
                       shape: RoundedRectangleBorder(
@@ -297,7 +389,6 @@ class _DashboardViewState extends State<DashboardView> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Subscription Banner Card
                     Card(
                       elevation: 2,
                       color: isProUser
@@ -373,9 +464,11 @@ class _DashboardViewState extends State<DashboardView> {
                         ),
                       ),
                     ),
+                    const SizedBox(height: 12),
+
+                    if (user != null) _buildReferralCard(user.uid),
                     const SizedBox(height: 20),
 
-                    // Revenue Overview
                     const Text(
                       'Daily Revenue Overview',
                       style:
@@ -409,7 +502,6 @@ class _DashboardViewState extends State<DashboardView> {
                     ),
                     const SizedBox(height: 20),
 
-                    // Recent Sales Header & Option C Purge Trigger
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -544,7 +636,6 @@ class _DashboardViewState extends State<DashboardView> {
                 ),
               ),
 
-              // Full Screen Overlay after 10-Day Free Trial Expires
               if (isExpired)
                 Container(
                   color: Colors.indigo.shade900,
