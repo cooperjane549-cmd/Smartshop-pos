@@ -1,9 +1,6 @@
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-/// Handles referral code generation, linking a new user to their referrer,
-/// and granting a free 30-day Pro extension once a referrer accumulates
-/// 5 referred users who have each made at least one paid upgrade.
 class ReferralService {
   static final ReferralService instance = ReferralService._internal();
   ReferralService._internal();
@@ -13,15 +10,14 @@ class ReferralService {
   static const int rewardDays = 30;
 
   CollectionReference get _usersCollection => _firestore.collection('users');
+  CollectionReference get _codesCollection => _firestore.collection('referral_codes');
 
   String _generateCandidateCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // avoids ambiguous chars like 0/O, 1/I
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     final rand = Random();
     return List.generate(6, (_) => chars[rand.nextInt(chars.length)]).join();
   }
 
-  /// Returns this user's referral code, generating and saving a unique one
-  /// if they don't have one yet.
   Future<String> getOrCreateReferralCode(String uid) async {
     final userDoc = await _usersCollection.doc(uid).get();
     final data = userDoc.data() as Map<String, dynamic>?;
@@ -34,14 +30,12 @@ class ReferralService {
 
     String code = _generateCandidateCode();
     for (int attempt = 0; attempt < 5; attempt++) {
-      final existing = await _usersCollection
-          .where('referralCode', isEqualTo: code)
-          .limit(1)
-          .get();
-      if (existing.docs.isEmpty) break;
+      final existing = await _codesCollection.doc(code).get();
+      if (!existing.exists) break;
       code = _generateCandidateCode();
     }
 
+    await _codesCollection.doc(code).set({'uid': uid});
     await _usersCollection.doc(uid).set({
       'referralCode': code,
     }, SetOptions(merge: true));
@@ -49,9 +43,6 @@ class ReferralService {
     return code;
   }
 
-  /// Called once, the first time a user signs in, with whatever referral
-  /// code they entered (or null if none/skip). Links them to their
-  /// referrer if the code is valid and they aren't already linked.
   Future<void> recordReferralIfNew(String newUserUid, String? enteredCode) async {
     if (enteredCode == null || enteredCode.trim().isEmpty) return;
     final code = enteredCode.trim().toUpperCase();
@@ -59,17 +50,15 @@ class ReferralService {
     final newUserDoc = await _usersCollection.doc(newUserUid).get();
     final existingData = newUserDoc.data() as Map<String, dynamic>?;
     if (existingData != null && existingData['referredBy'] != null) {
-      return; // Already linked, never overwrite
+      return;
     }
 
-    final matches = await _usersCollection
-        .where('referralCode', isEqualTo: code)
-        .limit(1)
-        .get();
-    if (matches.docs.isEmpty) return; // Invalid code, silently ignore
+    final codeDoc = await _codesCollection.doc(code).get();
+    if (!codeDoc.exists) return;
 
-    final referrerUid = matches.docs.first.id;
-    if (referrerUid == newUserUid) return; // Can't refer yourself
+    final codeData = codeDoc.data() as Map<String, dynamic>?;
+    final referrerUid = codeData?['uid'] as String?;
+    if (referrerUid == null || referrerUid == newUserUid) return;
 
     await _usersCollection.doc(newUserUid).set({
       'referredBy': referrerUid,
@@ -77,9 +66,6 @@ class ReferralService {
     }, SetOptions(merge: true));
   }
 
-  /// Call this whenever a user's subscription becomes active (paid).
-  /// Idempotent — only actually grants credit once per referred user,
-  /// via the referralCreditGiven flag, so it's safe to call repeatedly.
   Future<void> onUserUpgraded(String uid) async {
     final userDoc = await _usersCollection.doc(uid).get();
     final data = userDoc.data() as Map<String, dynamic>?;
@@ -90,8 +76,6 @@ class ReferralService {
 
     if (referrerUid == null || alreadyCredited) return;
 
-    // Mark this referred user as credited first, to avoid double-counting
-    // if this fires more than once in quick succession.
     await _usersCollection.doc(uid).set({
       'referralCreditGiven': true,
     }, SetOptions(merge: true));
@@ -106,7 +90,6 @@ class ReferralService {
       'referralQualifiedCount': newCount,
     }, SetOptions(merge: true));
 
-    // Grant a reward every time the count crosses a new multiple of 5
     if (newCount % referralsNeededForReward == 0) {
       await _grantFreeMonth(referrerUid);
     }
@@ -138,7 +121,6 @@ class ReferralService {
     }, SetOptions(merge: true));
   }
 
-  /// Returns {code, qualifiedCount} for displaying on the Dashboard.
   Future<Map<String, dynamic>> getReferralStats(String uid) async {
     final doc = await _usersCollection.doc(uid).get();
     final data = doc.data() as Map<String, dynamic>?;
