@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    name: Build Signed Android App Bundle
+    name: Build Signed Android App Bundle & APK
     runs-on: ubuntu-latest
 
     steps:
@@ -54,12 +54,22 @@ jobs:
           storeFile=upload-keystore.jks
           EOF
 
-      - name: Build Signed Release App Bundle
+      - name: Build Signed Release App Bundle (for Play Store)
         run: flutter build appbundle --release
+
+      - name: Build Signed Release APK (for local testing)
+        run: flutter build apk --release
 
       - name: Upload Signed App Bundle Artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-signed-aab
           path: build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+
+      - name: Upload Signed APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-signed-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
