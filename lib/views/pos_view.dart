@@ -8,6 +8,7 @@ import '../models/sale_transaction.dart';
 import '../services/local_db_service.dart';
 import '../services/firebase_service.dart';
 import '../services/shop_profile_service.dart';
+import '../services/currency_service.dart';
 import 'receipt_view.dart';
 
 class PosView extends StatefulWidget {
@@ -15,9 +16,6 @@ class PosView extends StatefulWidget {
   final List<SaleTransaction> sales;
   final Function(SaleTransaction) onSaleCompleted;
   final VoidCallback? onCreditSelected;
-  // Called when a CREDIT checkout's phone number matches an existing unpaid
-  // debtor and the cashier confirms merging into it, instead of creating a
-  // brand-new separate debt entry.
   final Function(String saleId, double addedAmount, List<CartItem> addedItems)?
       onExistingDebtFound;
 
@@ -44,14 +42,14 @@ class _PosViewState extends State<PosView> {
   String _searchQuery = '';
   DateTime? _selectedDueDate;
 
+  String get _currency => CurrencyService.symbol;
+
   @override
   void initState() {
     super.initState();
     _loadPersistedShopName();
   }
 
-  // Loads the shop name the owner previously saved (via a completed sale),
-  // so it's pre-filled instead of defaulting to "SmartShop" every time.
   Future<void> _loadPersistedShopName() async {
     final savedName = await ShopProfileService.instance.getShopName();
     if (mounted) {
@@ -110,8 +108,6 @@ class _PosViewState extends State<PosView> {
   double get cartTotal =>
       _cart.fold(0, (sum, item) => sum + (item.unitPrice * item.quantity));
 
-  // Strips a phone number down to digits and normalizes the local "0..."
-  // prefix to "254..." so different formats of the same number still match.
   String _normalizePhone(String raw) {
     String cleaned = raw.replaceAll(RegExp(r'\D'), '');
     if (cleaned.startsWith('0') && cleaned.length > 1) {
@@ -120,10 +116,6 @@ class _PosViewState extends State<PosView> {
     return cleaned;
   }
 
-  // Looks for an existing unpaid CREDIT sale with a matching phone number.
-  // If found, asks the cashier to confirm merging this purchase into it.
-  // Returns the existing SaleTransaction to merge into, or null to proceed
-  // as a brand new debtor.
   Future<SaleTransaction?> _resolveDebtorMatch(String phone) async {
     final normalizedInput = _normalizePhone(phone);
     if (normalizedInput.isEmpty) return null;
@@ -152,9 +144,9 @@ class _PosViewState extends State<PosView> {
         title: const Text('Existing Debt Found'),
         content: Text(
           '${matchedSale.customerName.isEmpty ? "This customer" : matchedSale.customerName} '
-          'already owes KES ${matchedSale.totalAmount.toStringAsFixed(0)}.\n\n'
-          'Add this purchase of KES ${cartTotal.toStringAsFixed(0)} to their existing debt?\n'
-          'New total will be KES ${newTotal.toStringAsFixed(0)}.',
+          'already owes $_currency ${matchedSale.totalAmount.toStringAsFixed(0)}.\n\n'
+          'Add this purchase of $_currency ${cartTotal.toStringAsFixed(0)} to their existing debt?\n'
+          'New total will be $_currency ${newTotal.toStringAsFixed(0)}.',
         ),
         actions: [
           TextButton(
@@ -174,9 +166,6 @@ class _PosViewState extends State<PosView> {
     return (confirmed == true) ? matchedSale : null;
   }
 
-  // Deducts stock for every item in the cart, directly by product ID in
-  // Firestore (atomic increment), independent of whether widget.products
-  // happens to contain a matching entry.
   Future<void> _deductStockForCartItems() async {
     final user = FirebaseAuth.instance.currentUser;
 
@@ -371,8 +360,6 @@ class _PosViewState extends State<PosView> {
                         return;
                       }
 
-                      // Check if this phone number already has an outstanding
-                      // debt before deciding whether to merge or create new.
                       final existingDebtor = await _resolveDebtorMatch(
                           _customerPhoneController.text.trim());
 
@@ -402,10 +389,6 @@ class _PosViewState extends State<PosView> {
     );
   }
 
-  // Merges the current cart into an existing debtor's balance instead of
-  // creating a brand-new separate debt record. Stock still deducts
-  // immediately; the actual debt ledger update happens once the cashier
-  // confirms it in the pre-filled Add Debt dialog on the Debtors screen.
   void _completeCreditMerge(SaleTransaction existingSale) async {
     if (_cart.isEmpty) return;
 
@@ -421,7 +404,7 @@ class _PosViewState extends State<PosView> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'Stock updated. Confirm adding KES ${addedAmount.toStringAsFixed(0)} '
+          'Stock updated. Confirm adding $_currency ${addedAmount.toStringAsFixed(0)} '
           'to ${existingSale.customerName}\'s balance on the Debtors screen.',
         ),
       ),
@@ -439,8 +422,6 @@ class _PosViewState extends State<PosView> {
   void _completeCheckout() async {
     if (_cart.isEmpty) return;
 
-    // Deduct stock directly in Firestore by product ID (atomic increment),
-    // independent of whatever is currently in widget.products.
     await _deductStockForCartItems();
 
     final phone = _customerPhoneController.text.trim();
@@ -459,18 +440,14 @@ class _PosViewState extends State<PosView> {
       createdAt: DateTime.now(),
     );
 
-    // Save to local database for offline resilience
     Map<String, dynamic> saleMap = sale.toMap();
     saleMap['items'] = jsonEncode(sale.items.map((e) => e.toMap()).toList());
     await LocalDbService.instance.insertSale(saleMap);
 
-    // Persist permanently to Cloud Firestore
     await FirebaseService().syncSale(sale);
 
-    // Notify parent hub
     widget.onSaleCompleted(sale);
 
-    // Send WhatsApp receipt/nudge if phone number is present
     if (phone.isNotEmpty) {
       _sendWhatsAppReceipt(
         phone: phone,
@@ -480,8 +457,6 @@ class _PosViewState extends State<PosView> {
       );
     }
 
-    // Save the shop name for next time, so it's remembered and pre-filled
-    // on future sales instead of defaulting back to "SmartShop".
     await ShopProfileService.instance.setShopName(shopName);
 
     if (!mounted) return;
@@ -489,8 +464,6 @@ class _PosViewState extends State<PosView> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        // Previously shopName was collected but never passed here, so the
-        // receipt always silently fell back to its default. Now fixed.
         builder: (context) => ReceiptView(sale: sale, shopName: shopName),
       ),
     );
@@ -523,7 +496,7 @@ class _PosViewState extends State<PosView> {
     StringBuffer itemList = StringBuffer();
     for (var item in sale.items) {
       itemList.writeln(
-          "- ${item.productName} x${item.quantity} = KES ${(item.quantity * item.unitPrice).toStringAsFixed(0)}");
+          "- ${item.productName} x${item.quantity} = $_currency ${(item.quantity * item.unitPrice).toStringAsFixed(0)}");
     }
 
     String message;
@@ -539,7 +512,7 @@ class _PosViewState extends State<PosView> {
           "Payment Due Date: $dueDateStr\n\n"
           "*Items Bought:*\n"
           "${itemList.toString()}\n"
-          "*Total Amount Due: KES ${sale.totalAmount.toStringAsFixed(0)}*\n"
+          "*Total Amount Due: $_currency ${sale.totalAmount.toStringAsFixed(0)}*\n"
           "------------------------------------\n"
           "Please clear your payment on or before $dueDateStr. Thank you for doing business with $shopName!";
     } else {
@@ -550,7 +523,7 @@ class _PosViewState extends State<PosView> {
           "Payment Method: ${sale.paymentMethod}\n\n"
           "*Items Bought:*\n"
           "${itemList.toString()}\n"
-          "*Total Paid: KES ${sale.totalAmount.toStringAsFixed(0)}*\n"
+          "*Total Paid: $_currency ${sale.totalAmount.toStringAsFixed(0)}*\n"
           "------------------------------------\n"
           "Thank you for shopping at $shopName!";
     }
@@ -573,7 +546,6 @@ class _PosViewState extends State<PosView> {
       ),
       body: Row(
         children: [
-          // Left: Search Bar & Product Catalog from Firestore
           Expanded(
             flex: 3,
             child: Column(
@@ -641,7 +613,6 @@ class _PosViewState extends State<PosView> {
               ],
             ),
           ),
-          // Right: Cart & Payment Details
           Expanded(
             flex: 2,
             child: Container(
@@ -672,7 +643,7 @@ class _PosViewState extends State<PosView> {
                                 ),
                                 subtitle: Text('x${item.quantity}'),
                                 trailing: Text(
-                                  'KES ${(item.quantity * item.unitPrice).toStringAsFixed(0)}',
+                                  '$_currency ${(item.quantity * item.unitPrice).toStringAsFixed(0)}',
                                   style: const TextStyle(
                                       fontWeight: FontWeight.bold),
                                 ),
@@ -690,7 +661,7 @@ class _PosViewState extends State<PosView> {
                             fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                       Text(
-                        'KES ${cartTotal.toStringAsFixed(0)}',
+                        '$_currency ${cartTotal.toStringAsFixed(0)}',
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -715,11 +686,11 @@ class _PosViewState extends State<PosView> {
                       const SizedBox(width: 4),
                       Expanded(
                         child: ChoiceChip(
-                          label: const Center(child: Text('M-PESA')),
-                          selected: _paymentMethod == 'MPESA',
+                          label: const Center(child: Text('OTHER')),
+                          selected: _paymentMethod == 'OTHER',
                           selectedColor: Colors.indigo.shade100,
                           onSelected: (s) {
-                            setState(() => _paymentMethod = 'MPESA');
+                            setState(() => _paymentMethod = 'OTHER');
                           },
                         ),
                       ),
@@ -806,7 +777,7 @@ class _PosViewState extends State<PosView> {
             backgroundColor: Colors.indigo,
           ),
           child: Text(
-            '+ KES ${p.sellingPrice.toStringAsFixed(0)}',
+            '+ $_currency ${p.sellingPrice.toStringAsFixed(0)}',
             style: const TextStyle(color: Colors.white),
           ),
         ),
