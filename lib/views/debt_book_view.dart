@@ -6,13 +6,11 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import '../models/sale_transaction.dart';
 import '../services/local_db_service.dart';
+import '../services/currency_service.dart';
 
 class DebtBookView extends StatefulWidget {
   final List<SaleTransaction> sales;
   final Function(String, String) onDebtCleared;
-  // When set, DebtBookView auto-opens the Add Debt dialog for this sale ID,
-  // pre-filled with the given amount/items — used when PosView hands off a
-  // credit sale that matches an existing debtor.
   final String? autoOpenSaleId;
   final double? autoAddAmount;
   final List<CartItem>? autoAddItems;
@@ -36,6 +34,8 @@ class _DebtBookViewState extends State<DebtBookView> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   bool _autoOpenTriggered = false;
+
+  String get _currency => CurrencyService.symbol;
 
   @override
   void dispose() {
@@ -76,7 +76,7 @@ class _DebtBookViewState extends State<DebtBookView> {
         : 'as agreed';
 
     final message =
-        "Hello ${sale.customerName}, this is a friendly reminder to clear your pending balance of KES ${sale.totalAmount.toStringAsFixed(0)} at SmartShop POS. Due Date: $dueDateFormatted. Thank you!";
+        "Hello ${sale.customerName}, this is a friendly reminder to clear your pending balance of $_currency ${sale.totalAmount.toStringAsFixed(0)} at SmartShop POS. Due Date: $dueDateFormatted. Thank you!";
 
     final uri = Uri.parse(
         "https://wa.me/$formattedPhone?text=${Uri.encodeComponent(message)}");
@@ -94,8 +94,7 @@ class _DebtBookViewState extends State<DebtBookView> {
 
   Future<void> _clearDebtInFirestore(String saleId) async {
     final user = FirebaseAuth.instance.currentUser;
-    
-    // Local SQLite Update
+
     final localSaleMap = {
       'id': saleId,
       'isPaid': 1,
@@ -103,7 +102,6 @@ class _DebtBookViewState extends State<DebtBookView> {
     };
     await LocalDbService.instance.insertSale(localSaleMap);
 
-    // Firestore Update
     if (user != null) {
       await FirebaseFirestore.instance
           .collection('users')
@@ -147,7 +145,6 @@ class _DebtBookViewState extends State<DebtBookView> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Toggle between recording a payment and adding new debt
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
@@ -172,7 +169,7 @@ class _DebtBookViewState extends State<DebtBookView> {
                   ),
                   const SizedBox(height: 14),
                   Text(
-                    'Current Balance: KES ${sale.totalAmount.toStringAsFixed(0)}',
+                    'Current Balance: $_currency ${sale.totalAmount.toStringAsFixed(0)}',
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       color: Colors.red,
@@ -198,7 +195,7 @@ class _DebtBookViewState extends State<DebtBookView> {
                           const SizedBox(height: 4),
                           ...initialItems.map(
                             (item) => Text(
-                              '• ${item.productName} x${item.quantity} = KES ${(item.quantity * item.unitPrice).toStringAsFixed(0)}',
+                              '• ${item.productName} x${item.quantity} = $_currency ${(item.quantity * item.unitPrice).toStringAsFixed(0)}',
                               style: const TextStyle(fontSize: 12),
                             ),
                           ),
@@ -211,7 +208,7 @@ class _DebtBookViewState extends State<DebtBookView> {
                     controller: amountController,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     decoration: InputDecoration(
-                      labelText: isAddMode ? 'Amount to Add (KES)' : 'Amount Paid (KES)',
+                      labelText: isAddMode ? 'Amount to Add ($_currency)' : 'Amount Paid ($_currency)',
                       border: const OutlineInputBorder(),
                     ),
                   ),
@@ -227,10 +224,10 @@ class _DebtBookViewState extends State<DebtBookView> {
                           onSelected: (val) => setDialogState(() => paymentMode = 'CASH'),
                         ),
                         ChoiceChip(
-                          label: const Text('M-PESA'),
-                          selected: paymentMode == 'MPESA',
+                          label: const Text('OTHER'),
+                          selected: paymentMode == 'OTHER',
                           selectedColor: Colors.indigo.shade100,
-                          onSelected: (val) => setDialogState(() => paymentMode = 'MPESA'),
+                          onSelected: (val) => setDialogState(() => paymentMode = 'OTHER'),
                         ),
                       ],
                     ),
@@ -264,11 +261,8 @@ class _DebtBookViewState extends State<DebtBookView> {
                     final now = DateTime.now();
 
                     if (isAddMode) {
-                      // ----- ADD DEBT FLOW -----
                       final double newBalance = sale.totalAmount + enteredAmount;
 
-                      // Use the itemized cart from the POS hand-off if present,
-                      // otherwise fall back to a generic labeled line item.
                       final List<CartItem> additionItems =
                           (initialItems != null && initialItems.isNotEmpty)
                               ? initialItems
@@ -281,11 +275,6 @@ class _DebtBookViewState extends State<DebtBookView> {
                                   )
                                 ];
 
-                      // 1. Record this debt addition as its own transaction for history/audit
-                      // ONLY — marked as 'CREDIT_ADDITION' + isPaid:true so this history
-                      // record is excluded from the debtors list query (which filters
-                      // strictly on paymentMethod == 'CREDIT' && !isPaid). The real
-                      // outstanding balance lives on the original `sale`, updated below.
                       final String additionSaleId = 'DEBTADD_${now.millisecondsSinceEpoch}';
                       final additionSale = SaleTransaction(
                         id: additionSaleId,
@@ -313,7 +302,6 @@ class _DebtBookViewState extends State<DebtBookView> {
                             .set(additionMap);
                       }
 
-                      // 2. Update the original credit sale's balance upward
                       final updatedSale = SaleTransaction(
                         id: sale.id,
                         totalAmount: newBalance,
@@ -348,16 +336,14 @@ class _DebtBookViewState extends State<DebtBookView> {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
-                              'Added KES ${enteredAmount.toStringAsFixed(0)} debt. New balance: KES ${newBalance.toStringAsFixed(0)}',
+                              'Added $_currency ${enteredAmount.toStringAsFixed(0)} debt. New balance: $_currency ${newBalance.toStringAsFixed(0)}',
                             ),
                           ),
                         );
                       }
                     } else {
-                      // ----- RECORD PAYMENT FLOW (unchanged existing behavior) -----
                       final double paidAmount = enteredAmount;
 
-                      // 1. Record payment cashflow transaction
                       final String repaymentSaleId = 'REP_${now.millisecondsSinceEpoch}';
                       final repaymentSale = SaleTransaction(
                         id: repaymentSaleId,
@@ -380,7 +366,6 @@ class _DebtBookViewState extends State<DebtBookView> {
                       Map<String, dynamic> repaymentMap = repaymentSale.toMap();
                       repaymentMap['items'] = jsonEncode(repaymentSale.items.map((e) => e.toMap()).toList());
 
-                      // Save payment locally & cloud
                       await LocalDbService.instance.insertSale(repaymentMap);
                       if (user != null) {
                         await FirebaseFirestore.instance
@@ -391,12 +376,10 @@ class _DebtBookViewState extends State<DebtBookView> {
                             .set(repaymentMap);
                       }
 
-                      // 2. Adjust original credit balance
                       final double remainingBalance = sale.totalAmount - paidAmount;
                       final bool isFullyPaid = remainingBalance <= 0;
                       final double newBalance = remainingBalance < 0 ? 0 : remainingBalance;
 
-                      // Create updated SaleTransaction object without mutating final fields
                       final updatedSale = SaleTransaction(
                         id: sale.id,
                         totalAmount: newBalance,
@@ -434,7 +417,7 @@ class _DebtBookViewState extends State<DebtBookView> {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
-                              'Recorded payment of KES ${paidAmount.toStringAsFixed(0)} via $paymentMode',
+                              'Recorded payment of $_currency ${paidAmount.toStringAsFixed(0)} via $paymentMode',
                             ),
                           ),
                         );
@@ -530,8 +513,6 @@ class _DebtBookViewState extends State<DebtBookView> {
                     })
                     .toList();
 
-                // If PosView handed off a "merge this sale into existing debtor"
-                // request, auto-open the Add Debt dialog for it, pre-filled.
                 if (widget.autoOpenSaleId != null && !_autoOpenTriggered) {
                   final matchIndex =
                       creditSales.indexWhere((s) => s.id == widget.autoOpenSaleId);
@@ -621,7 +602,7 @@ class _DebtBookViewState extends State<DebtBookView> {
                                   crossAxisAlignment: CrossAxisAlignment.end,
                                   children: [
                                     Text(
-                                      'KES ${sale.totalAmount.toStringAsFixed(0)}',
+                                      '$_currency ${sale.totalAmount.toStringAsFixed(0)}',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.bold,
                                         color: Colors.red,
