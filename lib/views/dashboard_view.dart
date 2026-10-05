@@ -6,10 +6,19 @@ import '../models/sale_transaction.dart';
 import '../services/auth_service.dart';
 import '../services/local_db_service.dart';
 import '../services/referral_service.dart';
-import '../services/app_config_service.dart';
+import '../services/currency_service.dart';
 import '../widgets/pin_dialog.dart';
+import '../widgets/currency_dialog.dart';
 import 'upgrade_dialog.dart';
 import 'terms_view.dart';
+
+// ============================================================
+// EDIT CONTACT DETAILS HERE — no need to touch any other code.
+// ============================================================
+const String kContactWhatsapp = '0789574046';
+const String kContactPhone = '+254789574046';
+const String kContactEmail = 'microgiger@gmail.com';
+// ============================================================
 
 class DashboardView extends StatefulWidget {
   final List<SaleTransaction> sales;
@@ -24,6 +33,8 @@ class _DashboardViewState extends State<DashboardView> {
   final AuthService _authService = AuthService();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  String get _currency => CurrencyService.symbol;
+
   List<SaleTransaction> get _activeSales {
     final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
     return widget.sales
@@ -35,9 +46,9 @@ class _DashboardViewState extends State<DashboardView> {
       .where((s) => s.paymentMethod == 'CASH')
       .fold(0, (sum, s) => sum + s.totalAmount);
 
-  double get mpesaCollected => _activeSales
+  double get otherCollected => _activeSales
       .where((s) =>
-          s.paymentMethod == 'MPESA' ||
+          s.paymentMethod == 'OTHER' ||
           (s.paymentMethod == 'CREDIT' && s.isPaid))
       .fold(0, (sum, s) => sum + s.totalAmount);
 
@@ -63,8 +74,6 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
-  // Now PIN-gated: owner must enter their PIN before a recent (<60 day)
-  // sale can be deleted.
   Future<void> _deleteSaleTransaction(SaleTransaction sale) async {
     final verified = await PinDialog.verify(
       context,
@@ -119,7 +128,6 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
-  // Unchanged — 60+ day old sales still clear automatically, no PIN needed.
   void _showClearHistoryDialog() {
     final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
     final olderSales = widget.sales
@@ -264,114 +272,79 @@ class _DashboardViewState extends State<DashboardView> {
     );
   }
 
-  // Contact Us + Terms & Conditions card — all contact details and T&Cs
-  // text are fetched from Firestore (app_config/general), never hardcoded.
-  // Now shows the actual error on-screen if the fetch fails, instead of
-  // silently rendering nothing.
-  Widget _buildContactAndTermsCard() {
-    return FutureBuilder<AppConfig>(
-      future: AppConfigService.instance.getConfig(),
-      builder: (context, snapshot) {
-        final config = snapshot.data;
-
-        return Card(
-          elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Contact Us',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 10),
-                if (snapshot.connectionState == ConnectionState.waiting)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8.0),
-                    child: Center(child: CircularProgressIndicator()),
-                  )
-                else if (snapshot.hasError)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8.0),
-                    child: Text(
-                      'Could not load contact info: ${snapshot.error}',
-                      style: const TextStyle(fontSize: 12, color: Colors.red),
-                    ),
-                  )
-                else if (config != null) ...[
-                  if (config.contactWhatsapp.isEmpty &&
-                      config.contactPhone.isEmpty &&
-                      config.contactEmail.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8.0),
-                      child: Text(
-                        'No contact details set yet.',
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
-                      ),
-                    ),
-                  if (config.contactWhatsapp.isNotEmpty)
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.chat, color: Colors.green),
-                      title: Text('WhatsApp: ${config.contactWhatsapp}'),
-                      onTap: () async {
-                        final phone = config.contactWhatsapp.replaceAll(RegExp(r'\D'), '');
-                        final formatted =
-                            phone.startsWith('0') ? '254${phone.substring(1)}' : phone;
-                        final uri = Uri.parse('https://wa.me/$formatted');
-                        if (await canLaunchUrl(uri)) {
-                          await launchUrl(uri, mode: LaunchMode.externalApplication);
-                        }
-                      },
-                    ),
-                  if (config.contactPhone.isNotEmpty)
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.call, color: Colors.indigo),
-                      title: Text('Call: ${config.contactPhone}'),
-                      onTap: () async {
-                        final uri = Uri.parse('tel:${config.contactPhone}');
-                        if (await canLaunchUrl(uri)) await launchUrl(uri);
-                      },
-                    ),
-                  if (config.contactEmail.isNotEmpty)
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.email, color: Colors.orange),
-                      title: Text('Email: ${config.contactEmail}'),
-                      onTap: () async {
-                        final uri = Uri.parse('mailto:${config.contactEmail}');
-                        if (await canLaunchUrl(uri)) await launchUrl(uri);
-                      },
-                    ),
-                ] else
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8.0),
-                    child: Text(
-                      'Contact info unavailable (unknown error).',
-                      style: TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                  ),
-                const Divider(height: 20),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.description_outlined, color: Colors.grey),
-                  title: const Text('Terms & Conditions'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const TermsView()),
-                    );
-                  },
-                ),
-              ],
+  Widget _buildContactAndTermsCard(String uid) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Contact Us',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
-          ),
-        );
-      },
+            const SizedBox(height: 10),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.chat, color: Colors.green),
+              title: Text('WhatsApp: $kContactWhatsapp'),
+              onTap: () async {
+                final phone = kContactWhatsapp.replaceAll(RegExp(r'\D'), '');
+                final formatted =
+                    phone.startsWith('0') ? '254${phone.substring(1)}' : phone;
+                final uri = Uri.parse('https://wa.me/$formatted');
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              },
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.call, color: Colors.indigo),
+              title: Text('Call: $kContactPhone'),
+              onTap: () async {
+                final uri = Uri.parse('tel:$kContactPhone');
+                if (await canLaunchUrl(uri)) await launchUrl(uri);
+              },
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.email, color: Colors.orange),
+              title: Text('Email: $kContactEmail'),
+              onTap: () async {
+                final uri = Uri.parse('mailto:$kContactEmail');
+                if (await canLaunchUrl(uri)) await launchUrl(uri);
+              },
+            ),
+            const Divider(height: 20),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.attach_money, color: Colors.teal),
+              title: Text('Currency: ${CurrencyService.code}'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                final changed = await CurrencyDialog.show(context, uid);
+                if (changed && mounted) setState(() {});
+              },
+            ),
+            const Divider(height: 20),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.description_outlined, color: Colors.grey),
+              title: const Text('Terms & Conditions'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const TermsView()),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -582,7 +555,7 @@ class _DashboardViewState extends State<DashboardView> {
                     if (user != null) _buildReferralCard(user.uid),
                     const SizedBox(height: 12),
 
-                    _buildContactAndTermsCard(),
+                    if (user != null) _buildContactAndTermsCard(user.uid),
                     const SizedBox(height: 20),
 
                     const Text(
@@ -596,15 +569,15 @@ class _DashboardViewState extends State<DashboardView> {
                         Expanded(
                           child: _buildTile(
                             'Cash',
-                            'KES ${cashCollected.toStringAsFixed(0)}',
+                            '$_currency ${cashCollected.toStringAsFixed(0)}',
                             Colors.green,
                           ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: _buildTile(
-                            'M-Pesa',
-                            'KES ${mpesaCollected.toStringAsFixed(0)}',
+                            'Other',
+                            '$_currency ${otherCollected.toStringAsFixed(0)}',
                             Colors.blue,
                           ),
                         ),
@@ -613,7 +586,7 @@ class _DashboardViewState extends State<DashboardView> {
                     const SizedBox(height: 10),
                     _buildTile(
                       'Uncollected Credit',
-                      'KES ${openCredit.toStringAsFixed(0)}',
+                      '$_currency ${openCredit.toStringAsFixed(0)}',
                       Colors.red,
                     ),
                     const SizedBox(height: 20),
@@ -667,7 +640,7 @@ class _DashboardViewState extends State<DashboardView> {
                                           Row(
                                             children: [
                                               Text(
-                                                'KES ${sale.totalAmount.toStringAsFixed(0)}',
+                                                '$_currency ${sale.totalAmount.toStringAsFixed(0)}',
                                                 style: TextStyle(
                                                   fontWeight: FontWeight.bold,
                                                   fontSize: 16,
@@ -734,7 +707,7 @@ class _DashboardViewState extends State<DashboardView> {
                                                     fontSize: 13),
                                               ),
                                               Text(
-                                                'KES ${(item.unitPrice * item.quantity).toStringAsFixed(0)}',
+                                                '$_currency ${(item.unitPrice * item.quantity).toStringAsFixed(0)}',
                                                 style: const TextStyle(
                                                     fontSize: 13),
                                               ),
@@ -777,7 +750,7 @@ class _DashboardViewState extends State<DashboardView> {
                       ),
                       const SizedBox(height: 14),
                       const Text(
-                        'Your free trial period has ended. To continue using SmartShop POS, please subscribe to one of our plans using Buy Goods Till 3043489.',
+                        'Your free trial period has ended. Subscribe to a plan to continue using SmartShop POS.',
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 14, color: Colors.white70, height: 1.4),
                       ),
@@ -794,7 +767,7 @@ class _DashboardViewState extends State<DashboardView> {
                         ),
                         onPressed: () => UpgradeDialog.show(context),
                         child: const Text(
-                          'Upgrade Now (From KES 100)',
+                          'Upgrade Now',
                           style: TextStyle(
                               fontSize: 16, fontWeight: FontWeight.bold),
                         ),
