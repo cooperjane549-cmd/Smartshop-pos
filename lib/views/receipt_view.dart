@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/sale_transaction.dart';
 import '../services/thermal_printer_service.dart';
+import '../services/currency_service.dart';
 
 class ReceiptView extends StatefulWidget {
   final SaleTransaction sale;
@@ -35,6 +36,8 @@ class _ReceiptViewState extends State<ReceiptView> {
   bool _isBluetoothOn = false;
   bool _isConnected = false;
   bool _isBusy = false;
+
+  String get _currency => CurrencyService.symbol;
 
   @override
   void initState() {
@@ -145,13 +148,8 @@ class _ReceiptViewState extends State<ReceiptView> {
 
   Future<void> _pairNewPrinter() async {
     await _printerService.openSystemBluetoothSettings();
-    // User pairs in system settings, then returns here and taps Refresh.
   }
 
-  // Shares the receipt as an actual PDF file via Android's native share
-  // sheet. WhatsApp can be picked from there — the cashier then selects the
-  // contact manually, since WhatsApp's link API cannot both pre-fill a
-  // number and attach a file in one step.
   Future<void> _sharePdfReceipt() async {
     setState(() => _isBusy = true);
     try {
@@ -324,10 +322,10 @@ class _ReceiptViewState extends State<ReceiptView> {
                   widget.sale.customerPhone!.isNotEmpty)
                 pw.Text("Phone: ${widget.sale.customerPhone}"),
               if (widget.sale.mpesaCode.isNotEmpty)
-                pw.Text("M-Pesa Code: ${widget.sale.mpesaCode}"),
+                pw.Text("Reference Code: ${widget.sale.mpesaCode}"),
               pw.SizedBox(height: 10),
               pw.TableHelper.fromTextArray(
-                headers: ['Item', 'Qty', 'Unit (KES)', 'Total (KES)'],
+                headers: ['Item', 'Qty', 'Unit ($_currency)', 'Total ($_currency)'],
                 data: widget.sale.items.map((item) {
                   return [
                     item.productName,
@@ -346,7 +344,7 @@ class _ReceiptViewState extends State<ReceiptView> {
                     style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                   ),
                   pw.Text(
-                    "KES ${widget.sale.totalAmount.toStringAsFixed(0)}",
+                    "$_currency ${widget.sale.totalAmount.toStringAsFixed(0)}",
                     style: pw.TextStyle(
                       fontWeight: pw.FontWeight.bold,
                       fontSize: 16,
