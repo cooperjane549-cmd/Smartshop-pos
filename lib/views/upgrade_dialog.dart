@@ -1,195 +1,162 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
+import 'package:in_app_purchase/in_app_purchase.dart';
+import '../services/billing_service.dart';
 
 class UpgradeDialog {
-  static void show(BuildContext context) {
-    final TextEditingController mpesaController = TextEditingController();
-    final User? user = FirebaseAuth.instance.currentUser;
-    String selectedPlan = '30 Days (KES 100)';
-    bool isLoading = false;
-
+  static void show(BuildContext context) async {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              title: Row(
-                children: const [
-                  Icon(Icons.workspace_premium, color: Colors.amber, size: 28),
-                  SizedBox(width: 8),
-                  Text('Upgrade SmartShop POS'),
-                ],
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '1. Select Plan:',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 6),
-                    DropdownButtonFormField<String>(
-                      value: selectedPlan,
-                      decoration: InputDecoration(
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                      ),
-                      items: const [
-                        DropdownMenuItem(
-                          value: '30 Days (KES 100)',
-                          child: Text('30 Days - KES 100'),
-                        ),
-                        DropdownMenuItem(
-                          value: '1 Year (KES 1100)',
-                          child: Text('1 Year - KES 1,100'),
-                        ),
-                      ],
-                      onChanged: (val) {
-                        if (val != null) setState(() => selectedPlan = val);
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      '2. Pay via M-Pesa:',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade100,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.grey.shade300),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
-                          Text('• Go to M-Pesa -> Lipa na M-Pesa'),
-                          Text('• Select Buy Goods and Services'),
-                          Text(
-                            '• Enter Till Number: 3043489',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.indigo,
-                            ),
-                          ),
-                          Text('• Enter Amount for selected plan'),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      '3. Paste M-Pesa Confirmation SMS:',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: mpesaController,
-                      maxLines: 3,
-                      decoration: InputDecoration(
-                        hintText: 'Paste full M-Pesa SMS message here...',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: isLoading
-                      ? null
-                      : () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.indigo,
-                    foregroundColor: Colors.white,
-                  ),
-                  onPressed: isLoading
-                      ? null
-                      : () async {
-                          final text = mpesaController.text.trim();
-                          if (text.isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Please paste your M-Pesa SMS message.'),
-                              ),
-                            );
-                            return;
-                          }
+      builder: (dialogContext) => const _UpgradeDialogContent(),
+    );
+  }
+}
 
-                          setState(() => isLoading = true);
+class _UpgradeDialogContent extends StatefulWidget {
+  const _UpgradeDialogContent();
 
-                          try {
-                            final response = await http.post(
-                              Uri.parse('https://smartshop-pos-render.onrender.com/send-upgrade-request'),
-                              headers: {'Content-Type': 'application/json'},
-                              body: jsonEncode({
-                                'uid': user?.uid ?? 'unknown_uid',
-                                'userEmail': user?.email ?? 'no_email',
-                                'userName': user?.displayName ?? 'Merchant',
-                                'mpesaMessage': text,
-                                'planName': selectedPlan,
-                              }),
-                            );
+  @override
+  State<_UpgradeDialogContent> createState() => _UpgradeDialogContentState();
+}
 
-                            if (response.statusCode == 200) {
-                              Navigator.of(dialogContext).pop();
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  backgroundColor: Colors.green,
-                                  content: Text(
-                                    'Upgrade request submitted! You will be unlocked once approved.',
-                                  ),
-                                ),
-                              );
-                            } else {
-                              throw Exception('Failed to send request');
-                            }
-                          } catch (e) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                backgroundColor: Colors.red,
-                                content: Text('Error submitting request: $e'),
-                              ),
-                            );
-                          } finally {
-                            setState(() => isLoading = false);
-                          }
-                        },
-                  child: isLoading
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : const Text('Submit Payment'),
-                ),
-              ],
-            );
-          },
+class _UpgradeDialogContentState extends State<_UpgradeDialogContent> {
+  List<ProductDetails> _products = [];
+  bool _loading = true;
+  bool _purchasing = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPlans();
+  }
+
+  Future<void> _loadPlans() async {
+    try {
+      final available = await BillingService.instance.isAvailable();
+      if (!available) {
+        setState(() {
+          _loading = false;
+          _error = 'Google Play Billing is not available on this device.';
+        });
+        return;
+      }
+
+      final products = await BillingService.instance.loadProducts();
+      setState(() {
+        _products = products;
+        _loading = false;
+        if (products.isEmpty) {
+          _error = 'No subscription plans found. Please try again shortly.';
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _loading = false;
+        _error = 'Could not load plans: $e';
+      });
+    }
+  }
+
+  Future<void> _buy(ProductDetails product) async {
+    setState(() => _purchasing = true);
+    try {
+      await BillingService.instance.purchase(product);
+      // Purchase result arrives asynchronously via the purchase stream
+      // (handled in BillingService), so we close this dialog now and let
+      // the Dashboard's subscription listener reflect the update once it
+      // lands.
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Purchase failed: $e')),
         );
-      },
+      }
+    } finally {
+      if (mounted) setState(() => _purchasing = false);
+    }
+  }
+
+  String _labelFor(String productId) {
+    switch (productId) {
+      case 'smartshop_pro_1m':
+        return '1 Month';
+      case 'smartshop_pro_3m':
+        return '3 Months';
+      case 'smartshop_pro_6m':
+        return '6 Months';
+      case 'smartshop_pro_12m':
+        return '12 Months';
+      default:
+        return productId;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Row(
+        children: const [
+          Icon(Icons.workspace_premium, color: Colors.amber, size: 28),
+          SizedBox(width: 8),
+          Text('Upgrade SmartShop POS'),
+        ],
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: _loading
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 30),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : _error != null
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Text(_error!, style: const TextStyle(color: Colors.red)),
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Choose a plan — payment is handled securely through Google Play.',
+                        style: TextStyle(fontSize: 13, color: Colors.black54),
+                      ),
+                      const SizedBox(height: 12),
+                      ..._products.map((product) {
+                        return Card(
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          child: ListTile(
+                            title: Text(_labelFor(product.id)),
+                            subtitle: Text(product.price),
+                            trailing: _purchasing
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.indigo,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    onPressed: () => _buy(product),
+                                    child: const Text('Buy'),
+                                  ),
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _purchasing ? null : () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
     );
   }
 }
