@@ -15,7 +15,7 @@ dependencies:
   google_sign_in: ^6.2.1
   sqflite: ^2.3.2
   path: ^1.9.0
-  telephony: ^0.2.0
+  in_app_purchase: ^3.2.0
   permission_handler: ^11.3.1
   blue_thermal_printer: ^1.2.3
   pdf: ^3.10.8
