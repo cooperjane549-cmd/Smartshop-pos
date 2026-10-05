@@ -266,6 +266,8 @@ class _DashboardViewState extends State<DashboardView> {
 
   // Contact Us + Terms & Conditions card — all contact details and T&Cs
   // text are fetched from Firestore (app_config/general), never hardcoded.
+  // Now shows the actual error on-screen if the fetch fails, instead of
+  // silently rendering nothing.
   Widget _buildContactAndTermsCard() {
     return FutureBuilder<AppConfig>(
       future: AppConfigService.instance.getConfig(),
@@ -290,7 +292,25 @@ class _DashboardViewState extends State<DashboardView> {
                     padding: EdgeInsets.symmetric(vertical: 8.0),
                     child: Center(child: CircularProgressIndicator()),
                   )
+                else if (snapshot.hasError)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8.0),
+                    child: Text(
+                      'Could not load contact info: ${snapshot.error}',
+                      style: const TextStyle(fontSize: 12, color: Colors.red),
+                    ),
+                  )
                 else if (config != null) ...[
+                  if (config.contactWhatsapp.isEmpty &&
+                      config.contactPhone.isEmpty &&
+                      config.contactEmail.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8.0),
+                      child: Text(
+                        'No contact details set yet.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ),
                   if (config.contactWhatsapp.isNotEmpty)
                     ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -326,7 +346,14 @@ class _DashboardViewState extends State<DashboardView> {
                         if (await canLaunchUrl(uri)) await launchUrl(uri);
                       },
                     ),
-                ],
+                ] else
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8.0),
+                    child: Text(
+                      'Contact info unavailable (unknown error).',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ),
                 const Divider(height: 20),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
