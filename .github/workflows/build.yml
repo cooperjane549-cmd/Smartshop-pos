@@ -1,4 +1,4 @@
-name: Flutter Build & Release Signed APK
+name: Flutter Build & Release Signed App Bundle
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    name: Build Signed Android APK
+    name: Build Signed Android App Bundle
     runs-on: ubuntu-latest
 
     steps:
@@ -54,12 +54,12 @@ jobs:
           storeFile=upload-keystore.jks
           EOF
 
-      - name: Build Signed Release APK
-        run: flutter build apk --release
+      - name: Build Signed Release App Bundle
+        run: flutter build appbundle --release
 
-      - name: Upload Signed APK Artifact
+      - name: Upload Signed App Bundle Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-signed-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: release-signed-aab
+          path: build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
