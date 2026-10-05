@@ -4,8 +4,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'models/product.dart';
 import 'models/sale_transaction.dart';
-import 'services/sms_parser_service.dart';
 import 'services/referral_service.dart';
+import 'services/currency_service.dart';
+import 'services/billing_service.dart';
 import 'views/dashboard_view.dart';
 import 'views/pos_view.dart';
 import 'views/inventory_view.dart';
@@ -19,6 +20,7 @@ void main() async {
   } catch (e) {
     debugPrint("Firebase initialization non-fatal warning: $e");
   }
+  BillingService.instance.initialize();
   runApp(const SmartShopApp());
 }
 
@@ -51,11 +53,9 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
   int _currentIndex = 0;
   final List<Product> _products = [];
   final List<SaleTransaction> _sales = [];
-  final SmsParserService _smsService = SmsParserService();
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  String _storeTillNumber = '3043489';
   bool _isSubscribed = false;
 
   String? _autoOpenDebtSaleId;
@@ -65,8 +65,15 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
   @override
   void initState() {
     super.initState();
+    _initCurrency();
     _loadFirestoreData();
-    _initSmsListener();
+  }
+
+  Future<void> _initCurrency() async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+    await CurrencyService.instance.initialize(user.uid);
+    if (mounted) setState(() {});
   }
 
   void _loadFirestoreData() async {
@@ -108,10 +115,6 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
         });
       });
 
-      // Stream subscription status. Whenever isSubscribed is true, also
-      // notify ReferralService — it's idempotent (only credits once per
-      // referred user via an internal flag), so it's safe to call on every
-      // snapshot rather than only on the first transition.
       _firestore
           .collection('users')
           .doc(user.uid)
@@ -135,94 +138,6 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
       });
     } catch (e) {
       debugPrint("Firestore data synchronization error: $e");
-    }
-  }
-
-  void _initSmsListener() async {
-    try {
-      bool granted = await _smsService.requestSmsPermissions();
-      if (!granted || !mounted) return;
-
-      _smsService.startListening(
-        storeTillNumber: _storeTillNumber,
-        currentSales: _sales,
-        onPaymentDetected: (payment) async {
-          if (!mounted) return;
-          final user = _auth.currentUser;
-          String? matchedCode;
-          double? matchedAmount;
-
-          for (var sale in _sales) {
-            if (!sale.isPaid && sale.totalAmount == payment.amount) {
-              sale.isPaid = true;
-              sale.mpesaCode = payment.code;
-              matchedCode = payment.code;
-              matchedAmount = payment.amount;
-
-              if (user != null) {
-                await _firestore
-                    .collection('users')
-                    .doc(user.uid)
-                    .collection('sales')
-                    .doc(sale.id)
-                    .update({
-                  'isPaid': true,
-                  'mpesaCode': payment.code,
-                });
-              }
-              break;
-            }
-          }
-
-          if (matchedCode != null && mounted) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    backgroundColor: Colors.green,
-                    content: Text(
-                      'Auto-Matched M-Pesa Code $matchedCode for KES $matchedAmount!',
-                    ),
-                  ),
-                );
-              }
-            });
-          }
-        },
-        onDebtAutoCleared: (saleId, mpesaCode) async {
-          if (!mounted) return;
-          final user = _auth.currentUser;
-          if (user != null) {
-            await _firestore
-                .collection('users')
-                .doc(user.uid)
-                .collection('sales')
-                .doc(saleId)
-                .update({
-              'isPaid': true,
-              'mpesaCode': mpesaCode,
-            });
-          }
-        },
-        onSubscriptionUpdated: (subscribed, expiry) async {
-          if (!mounted) return;
-          final user = _auth.currentUser;
-          if (user != null) {
-            await _firestore
-                .collection('users')
-                .doc(user.uid)
-                .collection('subscription')
-                .doc('status')
-                .set({
-              'isSubscribed': subscribed,
-              'expiryDate': Timestamp.fromDate(expiry),
-              'updatedAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-          }
-        },
-      );
-    } catch (e) {
-      debugPrint("SMS Listener permission or runtime error: $e");
     }
   }
 
