@@ -40,7 +40,7 @@ android {
         applicationId "co.ke.smartshoppos"
         minSdkVersion 24
         targetSdkVersion 36
-        versionCode 3
+        versionCode 4
         versionName "1.0.0"
         multiDexEnabled true
     }
