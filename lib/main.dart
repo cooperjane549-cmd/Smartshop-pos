@@ -20,7 +20,16 @@ void main() async {
   } catch (e) {
     debugPrint("Firebase initialization non-fatal warning: $e");
   }
-  BillingService.instance.initialize();
+
+  // Wrapped so a Play Billing connection failure (e.g. not running from a
+  // Play Store-distributed build, or billing temporarily unavailable)
+  // cannot crash the entire app on startup.
+  try {
+    BillingService.instance.initialize();
+  } catch (e) {
+    debugPrint("Billing initialization error (non-fatal): $e");
+  }
+
   runApp(const SmartShopApp());
 }
 
@@ -72,8 +81,12 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
   Future<void> _initCurrency() async {
     final user = _auth.currentUser;
     if (user == null) return;
-    await CurrencyService.instance.initialize(user.uid);
-    if (mounted) setState(() {});
+    try {
+      await CurrencyService.instance.initialize(user.uid);
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint("Currency initialization error (non-fatal): $e");
+    }
   }
 
   void _loadFirestoreData() async {
