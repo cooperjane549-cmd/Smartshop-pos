@@ -23,12 +23,6 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Debug - find sdkmanager
-        run: |
-          echo "ANDROID_HOME is: $ANDROID_HOME"
-          find /usr/local/lib/android -iname "sdkmanager" 2>/dev/null
-          find /usr/local/lib/android -maxdepth 4 -type d 2>/dev/null
-
       - name: Set up Flutter SDK
         uses: subosito/flutter-action@v2
         with:
@@ -41,6 +35,9 @@ jobs:
           GOOGLE_SERVICES_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           python3 -c "import base64, os; s = os.environ['GOOGLE_SERVICES_BASE64'].strip(); s += '=' * (-len(s) % 4); open('android/app/google-services.json', 'wb').write(base64.b64decode(s))"
+
+      - name: Clean previous build artifacts
+        run: flutter clean
 
       - name: Install dependencies
         run: flutter pub get
