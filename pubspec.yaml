@@ -18,7 +18,7 @@ dependencies:
   permission_handler: ^11.3.1
   blue_thermal_printer: ^1.2.3
   pdf: ^3.10.7
-  #printing: ^5.11.1
+  printing: ^5.13.1
   url_launcher: ^6.2.5
   intl: ^0.19.0
   cupertino_icons: ^1.0.6
@@ -34,6 +34,9 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+  
+  dependency_overrides:
+  web: ^0.5.1
 
 flutter:
   uses-material-design: true
