@@ -36,6 +36,9 @@ jobs:
         run: |
           python3 -c "import base64, os; s = os.environ['GOOGLE_SERVICES_BASE64'].strip(); s += '=' * (-len(s) % 4); open('android/app/google-services.json', 'wb').write(base64.b64decode(s))"
 
+      - name: Clean previous build artifacts
+        run: flutter clean
+
       - name: Install dependencies
         run: flutter pub get
 
