@@ -26,10 +26,11 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
       - name: Install required Android SDK Platform and Build Tools
-        run: |
-          sdkmanager --licenses || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up Flutter SDK
         uses: subosito/flutter-action@v2
