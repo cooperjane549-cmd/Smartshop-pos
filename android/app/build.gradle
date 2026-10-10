@@ -14,11 +14,11 @@ if (keyPropertiesFile.exists()) {
 android {
     namespace "co.ke.smartshoppos"
     compileSdkVersion 36
-    ndkVersion flutter.ndkVersion
+    ndkVersion "27.0.12077973"
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 
     kotlinOptions {
@@ -40,7 +40,7 @@ android {
         applicationId "co.ke.smartshoppos"
         minSdkVersion 24
         targetSdkVersion 36
-        versionCode 8
+        versionCode 9
         versionName "1.0.0"
         multiDexEnabled true
     }
