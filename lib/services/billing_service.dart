@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -41,7 +42,7 @@ class BillingService {
       _handlePurchaseUpdates,
       onDone: () => _subscription?.cancel(),
       onError: (error) {
-        // Swallow — a failed stream shouldn't crash the app.
+        debugPrint("BILLING DEBUG: purchaseStream error: $error");
       },
     );
   }
@@ -55,13 +56,24 @@ class BillingService {
   /// Fetches the 4 subscription products with their real, localized prices
   /// from Play Store. Call before showing the upgrade dialog.
   Future<List<ProductDetails>> loadProducts() async {
+    debugPrint("BILLING DEBUG: checking isAvailable...");
     final available = await isAvailable();
+    debugPrint("BILLING DEBUG: isAvailable = $available");
+
     if (!available) {
       products = [];
       return products;
     }
 
+    debugPrint("BILLING DEBUG: querying product IDs: $productIds");
     final response = await _iap.queryProductDetails(productIds);
+    debugPrint(
+        "BILLING DEBUG: found products: ${response.productDetails.map((p) => p.id).toList()}");
+    debugPrint("BILLING DEBUG: NOT found IDs: ${response.notFoundIDs}");
+    if (response.error != null) {
+      debugPrint("BILLING DEBUG: error: ${response.error}");
+    }
+
     products = response.productDetails;
     return products;
   }
