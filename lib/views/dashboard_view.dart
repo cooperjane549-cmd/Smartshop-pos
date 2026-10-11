@@ -31,6 +31,15 @@ class _DashboardViewState extends State<DashboardView> {
 
   String get _currency => CurrencyService.symbol;
 
+  @override
+  void initState() {
+    super.initState();
+    final user = _authService.currentUser;
+    if (user != null) {
+      _ensureTrialInitialized(user.uid);
+    }
+  }
+
   List<SaleTransaction> get _activeSales {
     final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
     return widget.sales
@@ -348,10 +357,6 @@ class _DashboardViewState extends State<DashboardView> {
   Widget build(BuildContext context) {
     final User? user = _authService.currentUser;
 
-    if (user != null) {
-      _ensureTrialInitialized(user.uid);
-    }
-
     return StreamBuilder<DocumentSnapshot>(
       stream: user != null
           ? _firestore
@@ -376,7 +381,6 @@ class _DashboardViewState extends State<DashboardView> {
         }
 
         final now = DateTime.now();
-
         int daysRemaining = 0;
         if (expiryDate != null) {
           daysRemaining = expiryDate.difference(now).inDays;
@@ -513,11 +517,14 @@ class _DashboardViewState extends State<DashboardView> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                expiryDate == null
-                                    ? 'Setting up trial...'
-                                    : isProUser
-                                        ? 'Renews in $daysRemaining days'
-                                        : '$daysRemaining days left on trial',
+                                snapshot.connectionState ==
+                                        ConnectionState.waiting
+                                    ? 'Loading subscription...'
+                                    : expiryDate == null
+                                        ? 'Trial setting up...'
+                                        : isProUser
+                                            ? 'Renews in $daysRemaining days'
+                                            : '$daysRemaining days left on trial',
                                 style: TextStyle(
                                   fontSize: 13,
                                   color: isProUser
