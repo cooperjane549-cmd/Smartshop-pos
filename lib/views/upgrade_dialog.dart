@@ -47,7 +47,7 @@ class _UpgradeDialogContentState extends State<_UpgradeDialogContent> {
         _products = products;
         _loading = false;
         if (products.isEmpty) {
-          _error = 'No subscription plans found. Please try again shortly.';
+          _error = 'No subscription plans returned by Google Play Store.\n\nPlease ensure an AAB build is uploaded to Internal Testing.';
         }
       });
     } catch (e) {
@@ -62,11 +62,8 @@ class _UpgradeDialogContentState extends State<_UpgradeDialogContent> {
     setState(() => _purchasing = true);
     try {
       await BillingService.instance.purchase(product);
-      // Purchase result arrives asynchronously via the purchase stream
-      // (handled in BillingService), so we close this dialog now and let
-      // the Dashboard's subscription listener reflect the update once it
-      // lands.
-      if (mounted) Navigator.of(context).pop();
+      // Native Google Play billing overlay launches automatically.
+      // Do not call Navigator.pop() here.
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
