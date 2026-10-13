@@ -61,12 +61,3 @@ flutter {
 dependencies {
     implementation platform('com.google.firebase:firebase-bom:32.7.2')
 }
-
-// FORCE BILLING 8 SUBTRACTION FOR PLAY STORE COMPLIANCE WITHOUT BREAKING RUNTIME CALLBACKS
-configurations.all {
-    resolutionStrategy.eachDependency { DependencyResolveDetails details ->
-        if (details.requested.group == 'com.android.billingclient' && details.requested.name == 'billing') {
-            details.useVersion '8.0.0'
-        }
-    }
-}
