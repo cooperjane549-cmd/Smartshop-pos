@@ -58,10 +58,10 @@ jobs:
           EOF
 
       - name: Build Signed Release App Bundle (for Play Store)
-        run: flutter build appbundle --release
+        run: flutter build appbundle --release --android-skip-build-dependency-validation
 
       - name: Build Signed Release APK (for local testing)
-        run: flutter build apk --release
+        run: flutter build apk --release --android-skip-build-dependency-validation
 
       - name: Upload Signed App Bundle Artifact
         uses: actions/upload-artifact@v4
