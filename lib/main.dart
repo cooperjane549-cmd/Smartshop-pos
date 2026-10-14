@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'models/product.dart';
 import 'models/sale_transaction.dart';
 import 'services/referral_service.dart';
@@ -13,6 +14,11 @@ import 'views/inventory_view.dart';
 import 'views/debt_book_view.dart';
 import 'views/auth_gate.dart';
 import 'views/upgrade_dialog.dart';
+
+// Same WhatsApp support number used on the Dashboard's Contact Us card,
+// so trial-expired users stuck on the lock screen have a way to reach
+// support about payment issues.
+const String kContactWhatsapp = '0789574046';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -327,14 +333,37 @@ class _MainNavigationHubState extends State<MainNavigationHub> {
                       ),
                     ),
                     const SizedBox(height: 20),
-                    TextButton(
-                      onPressed: () async {
-                        await FirebaseAuth.instance.signOut();
-                      },
-                      child: const Text(
-                        'Sign Out',
-                        style: TextStyle(color: Colors.white70),
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        TextButton.icon(
+                          onPressed: () async {
+                            final phone = kContactWhatsapp.replaceAll(RegExp(r'\D'), '');
+                            final formatted = phone.startsWith('0')
+                                ? '254${phone.substring(1)}'
+                                : phone;
+                            final uri = Uri.parse('https://wa.me/$formatted');
+                            if (await canLaunchUrl(uri)) {
+                              await launchUrl(uri, mode: LaunchMode.externalApplication);
+                            }
+                          },
+                          icon: const Icon(Icons.chat, color: Colors.white70, size: 18),
+                          label: const Text(
+                            'Contact Us',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        TextButton(
+                          onPressed: () async {
+                            await FirebaseAuth.instance.signOut();
+                          },
+                          child: const Text(
+                            'Sign Out',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
