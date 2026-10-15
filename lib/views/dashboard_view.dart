@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:intl/intl.dart';
 import '../models/sale_transaction.dart';
 import '../services/auth_service.dart';
 import '../services/local_db_service.dart';
@@ -28,14 +29,43 @@ class DashboardView extends StatefulWidget {
 class _DashboardViewState extends State<DashboardView> {
   final AuthService _authService = AuthService();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final TextEditingController _salesSearchController = TextEditingController();
+  String _salesSearchQuery = '';
+
+  // Kept in sync with the live expenses stream (see _buildExpensesCard)
+  // so the Net Profit tile below can use it without re-querying Firestore.
+  double _totalExpenses60Days = 0;
 
   String get _currency => CurrencyService.symbol;
+
+  double get netProfit => cashCollected + otherCollected - _totalExpenses60Days;
+
+  @override
+  void dispose() {
+    _salesSearchController.dispose();
+    super.dispose();
+  }
 
   List<SaleTransaction> get _activeSales {
     final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
     return widget.sales
         .where((s) => s.createdAt.isAfter(cutoffDate))
         .toList();
+  }
+
+  // Filters the 60-day active sales down to whatever the owner typed —
+  // matches sale ID, customer name, payment method, or the amount itself —
+  // so finding one specific sale doesn't mean scrolling a long list.
+  List<SaleTransaction> get _filteredActiveSales {
+    final list = _activeSales;
+    if (_salesSearchQuery.isEmpty) return list;
+    final q = _salesSearchQuery.toLowerCase();
+    return list.where((s) {
+      return s.id.toLowerCase().contains(q) ||
+          s.customerName.toLowerCase().contains(q) ||
+          s.paymentMethod.toLowerCase().contains(q) ||
+          s.totalAmount.toStringAsFixed(0).contains(q);
+    }).toList();
   }
 
   double get cashCollected => _activeSales
@@ -344,6 +374,220 @@ class _DashboardViewState extends State<DashboardView> {
     );
   }
 
+  // --- Expenses ---
+
+  Future<void> _addExpense(String uid, String description, double amount) async {
+    final docId = 'EXP_${DateTime.now().millisecondsSinceEpoch}';
+    await _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('expenses')
+        .doc(docId)
+        .set({
+      'id': docId,
+      'description': description,
+      'amount': amount,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+  }
+
+  Future<void> _deleteExpense(String uid, String expenseDocId) async {
+    final verified = await PinDialog.verify(
+      context,
+      reason: 'Enter PIN to delete this expense.',
+    );
+    if (!verified) return;
+
+    await _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('expenses')
+        .doc(expenseDocId)
+        .delete();
+  }
+
+  void _showAddExpenseDialog(String uid) {
+    final descController = TextEditingController();
+    final amountController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add Expense'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: descController,
+              decoration: const InputDecoration(
+                labelText: 'Description (e.g. Rent, Supplies)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: amountController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: 'Amount ($_currency)',
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
+            onPressed: () async {
+              final desc = descController.text.trim();
+              final amt = double.tryParse(amountController.text.trim()) ?? 0;
+              if (desc.isEmpty || amt <= 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please enter a description and a valid amount.'),
+                  ),
+                );
+                return;
+              }
+              await _addExpense(uid, desc, amt);
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Save', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExpensesCard(String uid) {
+    final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('expenses')
+          .snapshots(),
+      builder: (context, snapshot) {
+        List<Map<String, dynamic>> expenses = [];
+
+        if (snapshot.hasData) {
+          expenses = snapshot.data!.docs.map((doc) {
+            final data = Map<String, dynamic>.from(doc.data() as Map<String, dynamic>);
+            data['docId'] = doc.id;
+            return data;
+          }).where((e) {
+            final created = DateTime.tryParse(e['createdAt'] ?? '') ?? DateTime.now();
+            return created.isAfter(cutoffDate);
+          }).toList();
+
+          expenses.sort((a, b) {
+            final da = DateTime.tryParse(a['createdAt'] ?? '') ?? DateTime.now();
+            final db = DateTime.tryParse(b['createdAt'] ?? '') ?? DateTime.now();
+            return db.compareTo(da);
+          });
+        }
+
+        final total = expenses.fold<double>(
+          0,
+          (sum, e) => sum + ((e['amount'] ?? 0) as num).toDouble(),
+        );
+
+        // Keep the Dashboard's Net Profit tile in sync with this live total,
+        // without triggering a setState during build.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _totalExpenses60Days != total) {
+            setState(() => _totalExpenses60Days = total);
+          }
+        });
+
+        return Card(
+          elevation: 2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Expenses (60 Days)',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _showAddExpenseDialog(uid),
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Add'),
+                    ),
+                  ],
+                ),
+                Text(
+                  '$_currency ${total.toStringAsFixed(0)}',
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.red,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (expenses.isEmpty)
+                  Text(
+                    'No expenses recorded yet.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  )
+                else ...[
+                  ...expenses.take(5).map((e) {
+                    final created =
+                        DateTime.tryParse(e['createdAt'] ?? '') ?? DateTime.now();
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4.0),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${e['description'] ?? ''} • ${DateFormat('dd MMM').format(created)}',
+                              style: const TextStyle(fontSize: 13),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Text(
+                            '$_currency ${((e['amount'] ?? 0) as num).toStringAsFixed(0)}',
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, color: Colors.red, size: 18),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            onPressed: () => _deleteExpense(uid, e['docId']),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  if (expenses.length > 5)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6.0),
+                      child: Text(
+                        '+ ${expenses.length - 5} more this period',
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final User? user = _authService.currentUser;
@@ -383,7 +627,7 @@ class _DashboardViewState extends State<DashboardView> {
           if (daysRemaining < 0) daysRemaining = 0;
         }
 
-        final activeList = _activeSales;
+        final activeList = _filteredActiveSales;
 
         return Scaffold(
           appBar: AppBar(
@@ -549,6 +793,9 @@ class _DashboardViewState extends State<DashboardView> {
                 const SizedBox(height: 12),
 
                 if (user != null) _buildContactAndTermsCard(user.uid),
+                const SizedBox(height: 12),
+
+                if (user != null) _buildExpensesCard(user.uid),
                 const SizedBox(height: 20),
 
                 const Text(
@@ -578,6 +825,12 @@ class _DashboardViewState extends State<DashboardView> {
                 ),
                 const SizedBox(height: 10),
                 _buildTile(
+                  'Net Profit (Revenue - Expenses)',
+                  '$_currency ${netProfit.toStringAsFixed(0)}',
+                  netProfit >= 0 ? Colors.green.shade700 : Colors.red,
+                ),
+                const SizedBox(height: 10),
+                _buildTile(
                   'Uncollected Credit',
                   '$_currency ${openCredit.toStringAsFixed(0)}',
                   Colors.red,
@@ -601,119 +854,155 @@ class _DashboardViewState extends State<DashboardView> {
                   ],
                 ),
                 const SizedBox(height: 10),
-                activeList.isEmpty
+
+                TextField(
+                  controller: _salesSearchController,
+                  decoration: InputDecoration(
+                    hintText: 'Search sales by ID, customer, mode, or amount...',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _salesSearchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              setState(() {
+                                _salesSearchController.clear();
+                                _salesSearchQuery = '';
+                              });
+                            },
+                          )
+                        : null,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                    isDense: true,
+                  ),
+                  onChanged: (val) {
+                    setState(() {
+                      _salesSearchQuery = val.trim().toLowerCase();
+                    });
+                  },
+                ),
+                const SizedBox(height: 10),
+
+                _activeSales.isEmpty
                     ? const Text('No transactions in the last 60 days.')
-                    : ListView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: activeList.length,
-                        itemBuilder: (context, idx) {
-                          final sale =
-                              activeList[activeList.length - 1 - idx];
-                          return Card(
-                            margin:
-                                const EdgeInsets.symmetric(vertical: 6),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
+                    : activeList.isEmpty
+                        ? Text(
+                            'No sales match your search.',
+                            style: TextStyle(color: Colors.grey.shade600),
+                          )
+                        : ListView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: activeList.length,
+                            itemBuilder: (context, idx) {
+                              final sale =
+                                  activeList[activeList.length - 1 - idx];
+                              return Card(
+                                margin:
+                                    const EdgeInsets.symmetric(vertical: 6),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        'Sale ${sale.id}',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 14,
-                                        ),
-                                      ),
                                       Row(
-                                        children: [
-                                          Text(
-                                            '$_currency ${sale.totalAmount.toStringAsFixed(0)}',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 16,
-                                              color: sale.isPaid
-                                                  ? Colors.green
-                                                  : Colors.red,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 4),
-                                          IconButton(
-                                            icon: const Icon(
-                                              Icons.delete_outline,
-                                              color: Colors.red,
-                                              size: 20,
-                                            ),
-                                            padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(),
-                                            tooltip: 'Delete Sale',
-                                            onPressed: () =>
-                                                _deleteSaleTransaction(sale),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Mode: ${sale.paymentMethod} | Status: ${sale.isPaid ? "PAID" : "UNPAID"}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey[700],
-                                    ),
-                                  ),
-                                  if (sale.customerName != null &&
-                                      sale.customerName!.isNotEmpty)
-                                    Text(
-                                      'Customer: ${sale.customerName} (${sale.customerPhone ?? "No Phone"})',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.grey[800],
-                                      ),
-                                    ),
-                                  const Divider(height: 12),
-                                  const Text(
-                                    'Purchased Items:',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  ...sale.items.map(
-                                    (item) => Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 2.0,
-                                      ),
-                                      child: Row(
                                         mainAxisAlignment:
                                             MainAxisAlignment.spaceBetween,
                                         children: [
                                           Text(
-                                            '• ${item.productName} x${item.quantity}',
+                                            'Sale ${sale.id}',
                                             style: const TextStyle(
-                                                fontSize: 13),
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 14,
+                                            ),
                                           ),
-                                          Text(
-                                            '$_currency ${(item.unitPrice * item.quantity).toStringAsFixed(0)}',
-                                            style: const TextStyle(
-                                                fontSize: 13),
+                                          Row(
+                                            children: [
+                                              Text(
+                                                '$_currency ${sale.totalAmount.toStringAsFixed(0)}',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                  color: sale.isPaid
+                                                      ? Colors.green
+                                                      : Colors.red,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              IconButton(
+                                                icon: const Icon(
+                                                  Icons.delete_outline,
+                                                  color: Colors.red,
+                                                  size: 20,
+                                                ),
+                                                padding: EdgeInsets.zero,
+                                                constraints: const BoxConstraints(),
+                                                tooltip: 'Delete Sale',
+                                                onPressed: () =>
+                                                    _deleteSaleTransaction(sale),
+                                              ),
+                                            ],
                                           ),
                                         ],
                                       ),
-                                    ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Mode: ${sale.paymentMethod} | Status: ${sale.isPaid ? "PAID" : "UNPAID"}',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey[700],
+                                        ),
+                                      ),
+                                      if (sale.customerName != null &&
+                                          sale.customerName!.isNotEmpty)
+                                        Text(
+                                          'Customer: ${sale.customerName} (${sale.customerPhone ?? "No Phone"})',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey[800],
+                                          ),
+                                        ),
+                                      const Divider(height: 12),
+                                      const Text(
+                                        'Purchased Items:',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      ...sale.items.map(
+                                        (item) => Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 2.0,
+                                          ),
+                                          child: Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Text(
+                                                '• ${item.productName} x${item.quantity}',
+                                                style: const TextStyle(
+                                                    fontSize: 13),
+                                              ),
+                                              Text(
+                                                '$_currency ${(item.unitPrice * item.quantity).toStringAsFixed(0)}',
+                                                style: const TextStyle(
+                                                    fontSize: 13),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      )
+                                ),
+                              );
+                            },
+                          )
               ],
             ),
           ),
