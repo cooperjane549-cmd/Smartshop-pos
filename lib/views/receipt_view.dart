@@ -39,6 +39,14 @@ class _ReceiptViewState extends State<ReceiptView> {
 
   String get _currency => CurrencyService.symbol;
 
+  // Narrow, receipt-style page format — mimics an 80mm thermal roll instead
+  // of a full A4 sheet, so the generated PDF actually looks like a receipt.
+  static final PdfPageFormat _receiptFormat = PdfPageFormat(
+    80 * PdfPageFormat.mm,
+    double.infinity,
+    marginAll: 8 * PdfPageFormat.mm,
+  );
+
   @override
   void initState() {
     super.initState();
@@ -153,7 +161,7 @@ class _ReceiptViewState extends State<ReceiptView> {
   Future<void> _sharePdfReceipt() async {
     setState(() => _isBusy = true);
     try {
-      final bytes = await _generatePdfReceipt(PdfPageFormat.a4);
+      final bytes = await _generatePdfReceipt(_receiptFormat);
       final tempDir = await getTemporaryDirectory();
       final file = File('${tempDir.path}/receipt_${widget.sale.id}.pdf');
       await file.writeAsBytes(bytes);
@@ -265,7 +273,7 @@ class _ReceiptViewState extends State<ReceiptView> {
           ),
           Expanded(
             child: PdfPreview(
-              build: (format) => _generatePdfReceipt(format),
+              build: (format) => _generatePdfReceipt(_receiptFormat),
               allowPrinting: false,
               allowSharing: false,
               canChangePageFormat: false,
@@ -280,85 +288,172 @@ class _ReceiptViewState extends State<ReceiptView> {
   Future<Uint8List> _generatePdfReceipt(PdfPageFormat format) async {
     final pdf = pw.Document();
 
+    final dashedLine = pw.Container(
+      width: double.infinity,
+      child: pw.Row(
+        children: List.generate(
+          40,
+          (i) => pw.Expanded(
+            child: pw.Container(
+              margin: const pw.EdgeInsets.symmetric(horizontal: 0.5),
+              height: 1,
+              color: i.isEven ? PdfColors.grey600 : PdfColors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+
     pdf.addPage(
       pw.Page(
         pageFormat: format,
         build: (pw.Context context) {
           return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
             children: [
+              // --- Shop header ---
               pw.Center(
                 child: pw.Text(
-                  widget.shopName,
+                  widget.shopName.toUpperCase(),
                   style: pw.TextStyle(
-                    fontSize: 22,
+                    fontSize: 16,
                     fontWeight: pw.FontWeight.bold,
                   ),
+                  textAlign: pw.TextAlign.center,
                 ),
               ),
               if (widget.shopAddress.isNotEmpty)
                 pw.Center(
                   child: pw.Text(
                     widget.shopAddress,
-                    style: const pw.TextStyle(fontSize: 10),
+                    style: const pw.TextStyle(fontSize: 8),
+                    textAlign: pw.TextAlign.center,
                   ),
                 ),
               if (widget.shopPhone.isNotEmpty)
                 pw.Center(
                   child: pw.Text(
-                    "Tel: ${widget.shopPhone}",
-                    style: const pw.TextStyle(fontSize: 10),
+                    'Tel: ${widget.shopPhone}',
+                    style: const pw.TextStyle(fontSize: 8),
                   ),
                 ),
-              pw.Center(child: pw.Text("Official Purchase Receipt")),
-              pw.Divider(),
-              pw.Text("Receipt ID: ${widget.sale.id}"),
-              pw.Text("Date: ${widget.sale.createdAt.toString().split('.')[0]}"),
-              pw.Text("Payment Mode: ${widget.sale.paymentMethod}"),
+              pw.SizedBox(height: 4),
+              dashedLine,
+              pw.SizedBox(height: 4),
+
+              // --- Sale meta info ---
+              _metaRow('Receipt', widget.sale.id),
+              _metaRow('Date', widget.sale.createdAt.toString().split('.')[0]),
+              _metaRow('Payment', widget.sale.paymentMethod),
               if (widget.sale.customerName != null &&
                   widget.sale.customerName!.isNotEmpty)
-                pw.Text("Customer: ${widget.sale.customerName}"),
+                _metaRow('Customer', widget.sale.customerName!),
               if (widget.sale.customerPhone != null &&
                   widget.sale.customerPhone!.isNotEmpty)
-                pw.Text("Phone: ${widget.sale.customerPhone}"),
+                _metaRow('Phone', widget.sale.customerPhone!),
               if (widget.sale.mpesaCode.isNotEmpty)
-                pw.Text("Reference Code: ${widget.sale.mpesaCode}"),
-              pw.SizedBox(height: 10),
-              pw.TableHelper.fromTextArray(
-                headers: ['Item', 'Qty', 'Unit ($_currency)', 'Total ($_currency)'],
-                data: widget.sale.items.map((item) {
-                  return [
-                    item.productName,
-                    item.quantity.toString(),
-                    item.unitPrice.toStringAsFixed(0),
-                    (item.quantity * item.unitPrice).toStringAsFixed(0),
-                  ];
-                }).toList(),
+                _metaRow('Ref Code', widget.sale.mpesaCode),
+
+              pw.SizedBox(height: 4),
+              dashedLine,
+              pw.SizedBox(height: 4),
+
+              // --- Items header ---
+              pw.Row(
+                children: [
+                  pw.Expanded(
+                    flex: 5,
+                    child: pw.Text('Item',
+                        style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+                  ),
+                  pw.Expanded(
+                    flex: 2,
+                    child: pw.Text('Qty',
+                        textAlign: pw.TextAlign.center,
+                        style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+                  ),
+                  pw.Expanded(
+                    flex: 3,
+                    child: pw.Text('Amt',
+                        textAlign: pw.TextAlign.right,
+                        style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+                  ),
+                ],
               ),
-              pw.Divider(),
+              pw.SizedBox(height: 3),
+
+              // --- Items list ---
+              ...widget.sale.items.map((item) {
+                final lineTotal = (item.quantity * item.unitPrice).toStringAsFixed(0);
+                return pw.Padding(
+                  padding: const pw.EdgeInsets.only(bottom: 3),
+                  child: pw.Row(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Expanded(
+                        flex: 5,
+                        child: pw.Text(
+                          item.productName,
+                          style: const pw.TextStyle(fontSize: 9),
+                        ),
+                      ),
+                      pw.Expanded(
+                        flex: 2,
+                        child: pw.Text(
+                          '${item.quantity}',
+                          textAlign: pw.TextAlign.center,
+                          style: const pw.TextStyle(fontSize: 9),
+                        ),
+                      ),
+                      pw.Expanded(
+                        flex: 3,
+                        child: pw.Text(
+                          lineTotal,
+                          textAlign: pw.TextAlign.right,
+                          style: const pw.TextStyle(fontSize: 9),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+
+              pw.SizedBox(height: 4),
+              dashedLine,
+              pw.SizedBox(height: 6),
+
+              // --- Total ---
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
                   pw.Text(
-                    "TOTAL AMOUNT:",
-                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                    'TOTAL',
+                    style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
                   ),
                   pw.Text(
-                    "$_currency ${widget.sale.totalAmount.toStringAsFixed(0)}",
-                    style: pw.TextStyle(
-                      fontWeight: pw.FontWeight.bold,
-                      fontSize: 16,
-                    ),
+                    '$_currency ${widget.sale.totalAmount.toStringAsFixed(0)}',
+                    style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold),
                   ),
                 ],
               ),
-              pw.SizedBox(height: 20),
-              pw.Center(child: pw.Text("Thank you for shopping with us!")),
-              pw.SizedBox(height: 4),
+
+              pw.SizedBox(height: 10),
+              dashedLine,
+              pw.SizedBox(height: 8),
+
+              // --- Footer ---
               pw.Center(
                 child: pw.Text(
-                  "Powered by SmartShop POS",
-                  style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),
+                  'Thank you for shopping with us!',
+                  style: const pw.TextStyle(fontSize: 9),
+                  textAlign: pw.TextAlign.center,
+                ),
+              ),
+              pw.SizedBox(height: 10),
+              pw.Center(
+                child: pw.Text(
+                  'Powered by SmartShop POS',
+                  style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600),
                 ),
               ),
             ],
@@ -369,5 +464,30 @@ class _ReceiptViewState extends State<ReceiptView> {
 
     final List<int> pdfData = await pdf.save();
     return Uint8List.fromList(pdfData);
+  }
+
+  // Small helper for the compact "Label: Value" meta rows at the top of the
+  // receipt, used for Receipt ID, Date, Payment, Customer, etc.
+  pw.Widget _metaRow(String label, String value) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 2),
+      child: pw.Row(
+        children: [
+          pw.SizedBox(
+            width: 55,
+            child: pw.Text(
+              label,
+              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700),
+            ),
+          ),
+          pw.Expanded(
+            child: pw.Text(
+              value,
+              style: const pw.TextStyle(fontSize: 8),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
