@@ -17,6 +17,8 @@ const String kContactWhatsapp = '0789574046';
 const String kContactPhone = '+254789574046';
 const String kContactEmail = 'microgiger@gmail.com';
 
+enum RevenuePeriod { today, week, month, allTime }
+
 class DashboardView extends StatefulWidget {
   final List<SaleTransaction> sales;
 
@@ -32,13 +34,10 @@ class _DashboardViewState extends State<DashboardView> {
   final TextEditingController _salesSearchController = TextEditingController();
   String _salesSearchQuery = '';
 
-  // Kept in sync with the live expenses stream (see _buildExpensesCard)
-  // so the Net Profit tile below can use it without re-querying Firestore.
   double _totalExpenses60Days = 0;
+  RevenuePeriod _selectedPeriod = RevenuePeriod.today;
 
   String get _currency => CurrencyService.symbol;
-
-  double get netProfit => cashCollected + otherCollected - _totalExpenses60Days;
 
   @override
   void dispose() {
@@ -46,6 +45,8 @@ class _DashboardViewState extends State<DashboardView> {
     super.dispose();
   }
 
+  // The full 60-day rolling window — used for the sales list/search and as
+  // the basis the Expenses card still reports against.
   List<SaleTransaction> get _activeSales {
     final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
     return widget.sales
@@ -53,34 +54,83 @@ class _DashboardViewState extends State<DashboardView> {
         .toList();
   }
 
-  // Filters the 60-day active sales down to whatever the owner typed —
-  // matches sale ID, customer name, payment method, or the amount itself —
-  // so finding one specific sale doesn't mean scrolling a long list.
+  // Sales scoped to whichever period is selected in the Revenue Overview
+  // dropdown (Today / This Week / This Month / All Time).
+  List<SaleTransaction> get _periodSales {
+    final now = DateTime.now();
+    DateTime cutoff;
+
+    switch (_selectedPeriod) {
+      case RevenuePeriod.today:
+        cutoff = DateTime(now.year, now.month, now.day);
+        break;
+      case RevenuePeriod.week:
+        cutoff = now.subtract(Duration(days: now.weekday - 1));
+        cutoff = DateTime(cutoff.year, cutoff.month, cutoff.day);
+        break;
+      case RevenuePeriod.month:
+        cutoff = DateTime(now.year, now.month, 1);
+        break;
+      case RevenuePeriod.allTime:
+        // "All Time" here still respects the 60-day local retention window,
+        // same as the rest of the Dashboard and Recent Sales list.
+        cutoff = now.subtract(const Duration(days: 60));
+        break;
+    }
+
+    return widget.sales.where((s) => s.createdAt.isAfter(cutoff) ||
+        s.createdAt.isAtSameMomentAs(cutoff)).toList();
+  }
+
+  String get _periodLabel {
+    switch (_selectedPeriod) {
+      case RevenuePeriod.today:
+        return 'Today';
+      case RevenuePeriod.week:
+        return 'This Week';
+      case RevenuePeriod.month:
+        return 'This Month';
+      case RevenuePeriod.allTime:
+        return 'All Time (60 Days)';
+    }
+  }
+
+  // Filters the 60-day sales list by sale ID, customer, payment mode,
+  // amount, OR date — so typing e.g. "9 oct", "09/10", or just "9" finds
+  // sales from that day without scrolling the full list.
   List<SaleTransaction> get _filteredActiveSales {
     final list = _activeSales;
     if (_salesSearchQuery.isEmpty) return list;
     final q = _salesSearchQuery.toLowerCase();
     return list.where((s) {
+      final dateStr1 = DateFormat('d MMM yyyy').format(s.createdAt).toLowerCase();
+      final dateStr2 = DateFormat('dd/MM/yyyy').format(s.createdAt).toLowerCase();
+      final dayOnly = DateFormat('d').format(s.createdAt);
       return s.id.toLowerCase().contains(q) ||
           s.customerName.toLowerCase().contains(q) ||
           s.paymentMethod.toLowerCase().contains(q) ||
-          s.totalAmount.toStringAsFixed(0).contains(q);
+          s.totalAmount.toStringAsFixed(0).contains(q) ||
+          dateStr1.contains(q) ||
+          dateStr2.contains(q) ||
+          dayOnly == q;
     }).toList();
   }
 
-  double get cashCollected => _activeSales
+  double get cashCollected => _periodSales
       .where((s) => s.paymentMethod == 'CASH')
       .fold(0, (sum, s) => sum + s.totalAmount);
 
-  double get otherCollected => _activeSales
+  double get otherCollected => _periodSales
       .where((s) =>
           s.paymentMethod == 'OTHER' ||
           (s.paymentMethod == 'CREDIT' && s.isPaid))
       .fold(0, (sum, s) => sum + s.totalAmount);
 
-  double get openCredit => _activeSales
+  double get openCredit => _periodSales
       .where((s) => s.paymentMethod == 'CREDIT' && !s.isPaid)
       .fold(0, (sum, s) => sum + s.totalAmount);
+
+  double get netProfit => cashCollected + otherCollected - _totalExpenses60Days;
 
   Future<void> _ensureTrialInitialized(String uid) async {
     final docRef = _firestore
@@ -498,8 +548,6 @@ class _DashboardViewState extends State<DashboardView> {
           (sum, e) => sum + ((e['amount'] ?? 0) as num).toDouble(),
         );
 
-        // Keep the Dashboard's Net Profit tile in sync with this live total,
-        // without triggering a setState during build.
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && _totalExpenses60Days != total) {
             setState(() => _totalExpenses60Days = total);
@@ -798,10 +846,62 @@ class _DashboardViewState extends State<DashboardView> {
                 if (user != null) _buildExpensesCard(user.uid),
                 const SizedBox(height: 20),
 
-                const Text(
-                  'Daily Revenue Overview',
-                  style:
-                      TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                // --- Revenue Overview with period dropdown ---
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Revenue Overview',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.indigo.shade200),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<RevenuePeriod>(
+                          value: _selectedPeriod,
+                          isDense: true,
+                          icon: const Icon(Icons.arrow_drop_down, size: 20),
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.indigo.shade700,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: RevenuePeriod.today,
+                              child: Text('Today'),
+                            ),
+                            DropdownMenuItem(
+                              value: RevenuePeriod.week,
+                              child: Text('This Week'),
+                            ),
+                            DropdownMenuItem(
+                              value: RevenuePeriod.month,
+                              child: Text('This Month'),
+                            ),
+                            DropdownMenuItem(
+                              value: RevenuePeriod.allTime,
+                              child: Text('All Time (60d)'),
+                            ),
+                          ],
+                          onChanged: (val) {
+                            if (val != null) {
+                              setState(() => _selectedPeriod = val);
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Showing: $_periodLabel',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -858,7 +958,7 @@ class _DashboardViewState extends State<DashboardView> {
                 TextField(
                   controller: _salesSearchController,
                   decoration: InputDecoration(
-                    hintText: 'Search sales by ID, customer, mode, or amount...',
+                    hintText: 'Search by ID, customer, mode, amount, or date (e.g. 9 Oct)...',
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: _salesSearchQuery.isNotEmpty
                         ? IconButton(
@@ -912,11 +1012,14 @@ class _DashboardViewState extends State<DashboardView> {
                                         mainAxisAlignment:
                                             MainAxisAlignment.spaceBetween,
                                         children: [
-                                          Text(
-                                            'Sale ${sale.id}',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 14,
+                                          Expanded(
+                                            child: Text(
+                                              'Sale ${sale.id}',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 14,
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
                                             ),
                                           ),
                                           Row(
@@ -947,6 +1050,16 @@ class _DashboardViewState extends State<DashboardView> {
                                             ],
                                           ),
                                         ],
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        DateFormat('EEE, d MMM yyyy • h:mm a')
+                                            .format(sale.createdAt),
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.indigo.shade400,
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
