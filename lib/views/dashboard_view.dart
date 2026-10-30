@@ -8,7 +8,7 @@ import '../services/auth_service.dart';
 import '../services/local_db_service.dart';
 import '../services/referral_service.dart';
 import '../services/currency_service.dart';
-import '../services/bluetooth_printer_service.dart';
+import '../services/thermal_printer_service.dart';
 import '../widgets/pin_dialog.dart';
 import '../widgets/currency_dialog.dart';
 import 'upgrade_dialog.dart';
@@ -147,7 +147,8 @@ class _DashboardViewState extends State<DashboardView> {
 
   Future<void> _printReceipt(SaleTransaction sale) async {
     try {
-      await BluetoothPrinterService.printReceipt(sale);
+      final ThermalPrinterService printerService = ThermalPrinterService();
+      await printerService.printReceiptForSale(sale, 'SmartShop POS', '', '');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Receipt printed successfully!'), backgroundColor: Colors.green),
