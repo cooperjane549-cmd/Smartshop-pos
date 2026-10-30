@@ -148,7 +148,7 @@ class _DashboardViewState extends State<DashboardView> {
   Future<void> _printReceipt(SaleTransaction sale) async {
     try {
       final ThermalPrinterService printerService = ThermalPrinterService();
-      await printerService.printReceiptForSale(sale, 'SmartShop POS', '', '');
+      await printerService.printReceiptForSale(sale, 'SmartShop POS');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Receipt printed successfully!'), backgroundColor: Colors.green),
