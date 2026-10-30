@@ -8,6 +8,7 @@ import '../services/auth_service.dart';
 import '../services/local_db_service.dart';
 import '../services/referral_service.dart';
 import '../services/currency_service.dart';
+import '../services/bluetooth_printer_service.dart';
 import '../widgets/pin_dialog.dart';
 import '../widgets/currency_dialog.dart';
 import 'upgrade_dialog.dart';
@@ -16,6 +17,9 @@ import 'terms_view.dart';
 const String kContactWhatsapp = '0789574046';
 const String kContactPhone = '+254789574046';
 const String kContactEmail = 'microgiger@gmail.com';
+
+const String kPrivacyPolicyUrl =
+    'https://cooperjane549-cmd.github.io/Smartshop-pos/privacy-policy.html';
 
 enum RevenuePeriod { today, week, month, allTime }
 
@@ -45,8 +49,6 @@ class _DashboardViewState extends State<DashboardView> {
     super.dispose();
   }
 
-  // The full 60-day rolling window — used for the sales list/search and as
-  // the basis the Expenses card still reports against.
   List<SaleTransaction> get _activeSales {
     final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
     return widget.sales
@@ -54,8 +56,6 @@ class _DashboardViewState extends State<DashboardView> {
         .toList();
   }
 
-  // Sales scoped to whichever period is selected in the Revenue Overview
-  // dropdown (Today / This Week / This Month / All Time).
   List<SaleTransaction> get _periodSales {
     final now = DateTime.now();
     DateTime cutoff;
@@ -72,8 +72,6 @@ class _DashboardViewState extends State<DashboardView> {
         cutoff = DateTime(now.year, now.month, 1);
         break;
       case RevenuePeriod.allTime:
-        // "All Time" here still respects the 60-day local retention window,
-        // same as the rest of the Dashboard and Recent Sales list.
         cutoff = now.subtract(const Duration(days: 60));
         break;
     }
@@ -95,9 +93,6 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
-  // Filters the 60-day sales list by sale ID, customer, payment mode,
-  // amount, OR date — so typing e.g. "9 oct", "09/10", or just "9" finds
-  // sales from that day without scrolling the full list.
   List<SaleTransaction> get _filteredActiveSales {
     final list = _activeSales;
     if (_salesSearchQuery.isEmpty) return list;
@@ -147,6 +142,23 @@ class _DashboardViewState extends State<DashboardView> {
         'expiryDate': Timestamp.fromDate(trialExpiry),
         'createdAt': FieldValue.serverTimestamp(),
       });
+    }
+  }
+
+  Future<void> _printReceipt(SaleTransaction sale) async {
+    try {
+      await BluetoothPrinterService.printReceipt(sale);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Receipt printed successfully!'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Printing failed: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -418,13 +430,24 @@ class _DashboardViewState extends State<DashboardView> {
                 );
               },
             ),
+            const Divider(height: 20),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.privacy_tip_outlined, color: Colors.grey),
+              title: const Text('Privacy Policy'),
+              trailing: const Icon(Icons.open_in_new, size: 18),
+              onTap: () async {
+                final uri = Uri.parse(kPrivacyPolicyUrl);
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              },
+            ),
           ],
         ),
       ),
     );
   }
-
-  // --- Expenses ---
 
   Future<void> _addExpense(String uid, String description, double amount) async {
     final docId = 'EXP_${DateTime.now().millisecondsSinceEpoch}';
@@ -524,7 +547,7 @@ class _DashboardViewState extends State<DashboardView> {
           .collection('expenses')
           .snapshots(),
       builder: (context, snapshot) {
-        List<Map<String, dynamic>> expenses = [];
+        List> expenses = [];
 
         if (snapshot.hasData) {
           expenses = snapshot.data!.docs.map((doc) {
@@ -846,7 +869,6 @@ class _DashboardViewState extends State<DashboardView> {
                 if (user != null) _buildExpensesCard(user.uid),
                 const SizedBox(height: 20),
 
-                // --- Revenue Overview with period dropdown ---
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -958,7 +980,7 @@ class _DashboardViewState extends State<DashboardView> {
                 TextField(
                   controller: _salesSearchController,
                   decoration: InputDecoration(
-                    hintText: 'Search by ID, customer, mode, amount, or date (e.g. 9 Oct)...',
+                    hintText: 'Search by ID, customer, mode, amount, or date...',
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: _salesSearchQuery.isNotEmpty
                         ? IconButton(
@@ -1033,6 +1055,18 @@ class _DashboardViewState extends State<DashboardView> {
                                                       ? Colors.green
                                                       : Colors.red,
                                                 ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              IconButton(
+                                                icon: const Icon(
+                                                  Icons.print,
+                                                  color: Colors.indigo,
+                                                  size: 20,
+                                                ),
+                                                padding: EdgeInsets.zero,
+                                                constraints: const BoxConstraints(),
+                                                tooltip: 'Print Receipt',
+                                                onPressed: () => _printReceipt(sale),
                                               ),
                                               const SizedBox(width: 4),
                                               IconButton(
