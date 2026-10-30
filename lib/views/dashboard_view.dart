@@ -8,18 +8,23 @@ import '../services/auth_service.dart';
 import '../services/local_db_service.dart';
 import '../services/referral_service.dart';
 import '../services/currency_service.dart';
-import '../services/thermal_printer_service.dart';
+import '../services/shop_profile_service.dart';
 import '../widgets/pin_dialog.dart';
 import '../widgets/currency_dialog.dart';
 import 'upgrade_dialog.dart';
 import 'terms_view.dart';
+import 'receipt_view.dart';
 
 const String kContactWhatsapp = '0789574046';
 const String kContactPhone = '+254789574046';
 const String kContactEmail = 'microgiger@gmail.com';
 
-const String kPrivacyPolicyUrl =
-    'https://cooperjane549-cmd.github.io/Smartshop-pos/privacy-policy.html';
+// ============================================================
+// EDIT THE PRIVACY POLICY LINK HERE — must match the exact URL
+// you entered in Play Console (App content → Privacy policy).
+// ============================================================
+const String kPrivacyPolicyUrl = 'https://cooperjane549-cmd.github.io/Smartshop-pos/';
+// ============================================================
 
 enum RevenuePeriod { today, week, month, allTime }
 
@@ -49,6 +54,8 @@ class _DashboardViewState extends State<DashboardView> {
     super.dispose();
   }
 
+  // The full 60-day rolling window — used for the sales list/search and as
+  // the basis the Expenses card still reports against.
   List<SaleTransaction> get _activeSales {
     final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
     return widget.sales
@@ -56,6 +63,8 @@ class _DashboardViewState extends State<DashboardView> {
         .toList();
   }
 
+  // Sales scoped to whichever period is selected in the Revenue Overview
+  // dropdown (Today / This Week / This Month / All Time).
   List<SaleTransaction> get _periodSales {
     final now = DateTime.now();
     DateTime cutoff;
@@ -76,8 +85,10 @@ class _DashboardViewState extends State<DashboardView> {
         break;
     }
 
-    return widget.sales.where((s) => s.createdAt.isAfter(cutoff) ||
-        s.createdAt.isAtSameMomentAs(cutoff)).toList();
+    return widget.sales
+        .where((s) =>
+            s.createdAt.isAfter(cutoff) || s.createdAt.isAtSameMomentAs(cutoff))
+        .toList();
   }
 
   String get _periodLabel {
@@ -93,6 +104,9 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
+  // Filters the 60-day sales list by sale ID, customer, payment mode,
+  // amount, OR date — so typing e.g. "9 oct", "09/10", or just "9" finds
+  // sales from that day without scrolling the full list.
   List<SaleTransaction> get _filteredActiveSales {
     final list = _activeSales;
     if (_salesSearchQuery.isEmpty) return list;
@@ -145,22 +159,17 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
-  Future<void> _printReceipt(SaleTransaction sale) async {
-    try {
-      final ThermalPrinterService printerService = ThermalPrinterService();
-      await printerService.printReceiptForSale(sale, 'SmartShop POS');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Receipt printed successfully!'), backgroundColor: Colors.green),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Printing failed: $e'), backgroundColor: Colors.red),
-        );
-      }
-    }
+  // Reopens the receipt screen for an earlier sale, so the owner can
+  // re-print it on the Bluetooth printer or share it as a PDF again.
+  Future<void> _openReceiptForSale(SaleTransaction sale) async {
+    final shopName = await ShopProfileService.instance.getShopName();
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ReceiptView(sale: sale, shopName: shopName),
+      ),
+    );
   }
 
   Future<void> _deleteSaleTransaction(SaleTransaction sale) async {
@@ -450,6 +459,8 @@ class _DashboardViewState extends State<DashboardView> {
     );
   }
 
+  // --- Expenses ---
+
   Future<void> _addExpense(String uid, String description, double amount) async {
     final docId = 'EXP_${DateTime.now().millisecondsSinceEpoch}';
     await _firestore
@@ -548,7 +559,7 @@ class _DashboardViewState extends State<DashboardView> {
           .collection('expenses')
           .snapshots(),
       builder: (context, snapshot) {
-        List> expenses = [];
+        List<Map<String, dynamic>> expenses = [];
 
         if (snapshot.hasData) {
           expenses = snapshot.data!.docs.map((doc) {
@@ -870,6 +881,7 @@ class _DashboardViewState extends State<DashboardView> {
                 if (user != null) _buildExpensesCard(user.uid),
                 const SizedBox(height: 20),
 
+                // --- Revenue Overview with period dropdown ---
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -981,7 +993,7 @@ class _DashboardViewState extends State<DashboardView> {
                 TextField(
                   controller: _salesSearchController,
                   decoration: InputDecoration(
-                    hintText: 'Search by ID, customer, mode, amount, or date...',
+                    hintText: 'Search by ID, customer, mode, amount, or date (e.g. 9 Oct)...',
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: _salesSearchQuery.isNotEmpty
                         ? IconButton(
@@ -1060,18 +1072,6 @@ class _DashboardViewState extends State<DashboardView> {
                                               const SizedBox(width: 4),
                                               IconButton(
                                                 icon: const Icon(
-                                                  Icons.print,
-                                                  color: Colors.indigo,
-                                                  size: 20,
-                                                ),
-                                                padding: EdgeInsets.zero,
-                                                constraints: const BoxConstraints(),
-                                                tooltip: 'Print Receipt',
-                                                onPressed: () => _printReceipt(sale),
-                                              ),
-                                              const SizedBox(width: 4),
-                                              IconButton(
-                                                icon: const Icon(
                                                   Icons.delete_outline,
                                                   color: Colors.red,
                                                   size: 20,
@@ -1142,6 +1142,23 @@ class _DashboardViewState extends State<DashboardView> {
                                                     fontSize: 13),
                                               ),
                                             ],
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: OutlinedButton.icon(
+                                          onPressed: () =>
+                                              _openReceiptForSale(sale),
+                                          icon: const Icon(Icons.receipt_long,
+                                              size: 18),
+                                          label: const Text(
+                                              'Print / Share Receipt'),
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: Colors.indigo,
+                                            side: BorderSide(
+                                                color: Colors.indigo.shade200),
                                           ),
                                         ),
                                       ),
